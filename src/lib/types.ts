@@ -137,6 +137,8 @@ export interface Task {
   metrics?: MetricSnapshot[];
   /** Ручное переопределение вердикта. Нет поля: считается по правилам. */
   verdict?: Verdict;
+  /** Куда ещё дублируем пост, кроме основного channelId. */
+  alsoTo?: ChannelId[];
 }
 
 export interface Member {
@@ -241,6 +243,86 @@ export interface Meta {
   releases?: Release[];
 }
 
+// ───────────── Пульс: что происходит в соцсетях ─────────────
+
+/** Соцсети, которые слушает «Пульс». */
+export const PULSE_NETWORKS = ["x", "reddit", "discord"] as const;
+export type PulseNetwork = (typeof PULSE_NETWORKS)[number];
+
+/** Что слушаем. Общая настройка команды. */
+export interface PulseSources {
+  /** Watchlist в X: ники без @ */
+  xAccounts: string[];
+  /** Поиск по X, нужен X_BEARER_TOKEN */
+  xQueries: string[];
+  /** Отдельные твиты. Референсы из плана и наши вышедшие посты добавляются сами */
+  xPosts: string[];
+  subreddits: string[];
+  /** Поиск упоминаний по Reddit */
+  redditQueries: string[];
+  /** Коды инвайтов Discord: discord.gg/<код> */
+  discordInvites: string[];
+  /** ID каналов Discord, которые читает бот */
+  discordChannels: string[];
+}
+
+export type PulseItemKind = "post" | "mention" | "message" | "server";
+
+/** Одна единица из соцсети: пост, упоминание, сообщение или сервер. */
+export interface PulseItem {
+  id: string;
+  network: PulseNetwork;
+  kind: PulseItemKind;
+  author: string;
+  title?: string;
+  text: string;
+  url: string;
+  /** мс */
+  at: number;
+  likes: number;
+  replies: number;
+  reposts?: number;
+  views?: number;
+  bookmarks?: number;
+  /** Сабреддит, канал, запрос: откуда пришло */
+  source: string;
+  media?: "video" | "image" | null;
+  /** Наш пост или наш сервер */
+  ours?: boolean;
+  /** Для серверов Discord: онлайн */
+  online?: number;
+}
+
+export interface PulseInsight {
+  network: PulseNetwork | "all";
+  title: string;
+  detail: string;
+  /** Что сделать */
+  action?: string;
+  /** Ссылки на примеры */
+  refs?: string[];
+}
+
+export interface PulseDigest {
+  at: number;
+  by: string | null;
+  /** ai = собрал Claude, rules = посчитано по правилам без ключа */
+  engine: "ai" | "rules";
+  headline: string;
+  insights: PulseInsight[];
+  /** Готовые ответы на чужие посты и упоминания */
+  replies: { url: string; to: string; draft: string }[];
+  /** Идеи постов */
+  ideas: string[];
+}
+
+export interface PulseStore {
+  sources?: PulseSources;
+  digest?: PulseDigest;
+  /** Черновики ответов: url → текст */
+  replies?: Record<string, string>;
+}
+
 export interface DB {
   members: Record<string, Member>;
   channels: Record<ChannelId, Channel>;
@@ -249,10 +331,11 @@ export interface DB {
   events: Record<string, Ev>;
   docs: Record<string, Doc>;
   expenses: Record<string, Expense>;
+  pulse: PulseStore;
   meta: Meta;
 }
 
-export type Kind = "member" | "channel" | "target" | "task" | "event" | "doc" | "expense" | "meta";
+export type Kind = "member" | "channel" | "target" | "task" | "event" | "doc" | "expense" | "pulse" | "meta";
 
 /** Одна строка хранилища. data === null означает удаление. */
 export interface Row {

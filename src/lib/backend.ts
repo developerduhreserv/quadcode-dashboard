@@ -19,6 +19,7 @@ const KEY: Record<Exclude<Kind, "meta">, Exclude<keyof DB, "meta">> = {
   event: "events",
   doc: "docs",
   expense: "expenses",
+  pulse: "pulse",
 };
 
 export function applyRows(db: DB, rows: Row[]): DB {

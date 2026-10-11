@@ -187,17 +187,11 @@ export function QuickCapture({
           <CornerDownLeft size={17} />
         </button>
       </div>
-      <div className={cx("mt-2 flex min-h-[20px] flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-muted", large ? "pl-7" : "pl-6")}>
-        {value.trim() ? (
+      {value.trim() && (
+        <div className={cx("mt-2 flex min-h-[20px] flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-muted", large ? "pl-7" : "pl-6")}>
           <ParsedChips input={parsed} members={db.members} />
-        ) : (
-          <span>
-            Метки в тексте: <span className="font-mono text-ink-2">#x #тредс #дс #рд</span> ·{" "}
-            <span className="font-mono text-ink-2">@имя</span> · <span className="font-mono text-ink-2">!!</span> срочно ·{" "}
-            <span className="font-mono text-ink-2">завтра</span>
-          </span>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -403,9 +397,11 @@ export function TaskEditor({ taskId, onClose }: { taskId: string | null; onClose
             />
           </Field>
         )}
-        <Field label="Канал">
-          <ChannelPicker value={task.channelId} onChange={(channelId) => updateTask(task.id, { channelId })} />
-        </Field>
+        {(task.daily || !isPost(task)) && (
+          <Field label="Канал">
+            <ChannelPicker value={task.channelId} onChange={(channelId) => updateTask(task.id, { channelId })} />
+          </Field>
+        )}
         <Field label="Кто делает">
           <Pills
             label="Исполнитель"

@@ -47,8 +47,6 @@ export default function TasksPage() {
     <div className="stagger">
       <PageHead
         title="Задачи"
-        purpose="Работа, которая не пост: монтаж, гайды, страницы на сайтах, посевы. Посты живут в «Плане»."
-        steps={["Добавить задачу", "Перетащить в «В работе»", "Закрыть галочкой"]}
         right={
           <>
             <Button onClick={() => shell.openAdd({}, true)} title="Вставить список строк из переписки">

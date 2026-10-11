@@ -259,6 +259,7 @@ export function emptyDB(): DB {
     events: {},
     docs: {},
     expenses: {},
+    pulse: {},
     meta: { workspace: "Quadcode AI", funnelGoal: { sent: 28, replied: 10, concept: 5, call: 2, won: 1 } },
   };
 }

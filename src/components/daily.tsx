@@ -59,10 +59,7 @@ export function DailyStrip() {
       <header className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1">
         <div className="flex items-center gap-2.5">
           <Pin size={15} className="text-accent" />
-          <h2 className="font-display text-[16px] font-medium">Каждый день, обязательно</h2>
-          <span className="rounded-md border border-accent/40 px-1.5 py-0.5 font-mono text-[10.5px] uppercase tracking-[0.12em] text-accent-soft">
-            high
-          </span>
+          <h2 className="font-display text-[16px] font-medium">Каждый день</h2>
         </div>
         <span className="text-[13px] tabular-nums text-muted">
           <span className="font-medium text-ink">{done}</span> из {list.length} сегодня
@@ -126,7 +123,7 @@ export function DailyStrip() {
                   </>
                 ) : (
                   <>
-                    <span className="text-[12.5px] text-muted">{streak > 0 ? `${streak} дн. подряд` : "сегодня ещё нет"}</span>
+                    <span className="text-[12.5px] text-muted">{streak > 0 ? `${streak} дн. подряд` : ""}</span>
                     <Button
                       variant="primary"
                       className="h-8 px-3.5 text-[13px]"

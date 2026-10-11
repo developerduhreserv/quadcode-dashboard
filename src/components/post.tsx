@@ -15,10 +15,11 @@ import {
   snapshotLabel,
   verdictOf,
 } from "@/lib/content";
+import { CHANNELS, accountsOf } from "@/lib/meta";
 import { addSnapshot, markPosted, removeSnapshot, updateTask, useApp } from "@/lib/store";
-import { FORMAT_IDS } from "@/lib/types";
-import type { FormatId, MetricSnapshot, Task, Verdict } from "@/lib/types";
-import { Button, IconButton, Pills, cx, fieldClass } from "./ui";
+import { CHANNEL_IDS, FORMAT_IDS } from "@/lib/types";
+import type { ChannelId, FormatId, MetricSnapshot, Task, Verdict } from "@/lib/types";
+import { Button, ChannelGlyph, IconButton, Pills, cx, fieldClass } from "./ui";
 
 const TONE: Record<"good" | "warn" | "crit" | "muted", string> = {
   good: "border-good/40 bg-good/10 text-good",
@@ -41,6 +42,28 @@ export function FormatBadge({ id, size = "sm" }: { id?: FormatId; size?: "sm" | 
     >
       {f.code}
       <span className="normal-case tracking-normal">{none ? "нет рубрики" : f.name}</span>
+    </span>
+  );
+}
+
+/** Куда выходит пост: логотип соцсети, наш аккаунт и дубли. Без канала пост считается постом в X. */
+export function Where({ task, className, compact }: { task: Task; className?: string; compact?: boolean }) {
+  const { db } = useApp();
+  const main: ChannelId = task.channelId ?? "x";
+  const handle = accountsOf(db.channels[main])[0]?.handle;
+  const extra = (task.alsoTo ?? []).filter((c) => c !== main);
+  const title = [`${CHANNELS[main].name}${handle ? `, ${handle}` : ""}`, ...extra.map((c) => `дубль в ${CHANNELS[c].name}`)].join(" · ");
+  return (
+    <span title={title} className={cx("inline-flex shrink-0 items-center gap-1.5 text-ink-2", className)}>
+      <span style={{ color: CHANNELS[main].color }}>
+        <ChannelGlyph id={main} size={12} />
+      </span>
+      {!compact && <span>{handle ?? CHANNELS[main].name}</span>}
+      {extra.map((c) => (
+        <span key={c} style={{ color: CHANNELS[c].color }} className="opacity-80">
+          <ChannelGlyph id={c} size={11} />
+        </span>
+      ))}
     </span>
   );
 }
@@ -208,12 +231,14 @@ export function PostFields({ task }: { task: Task }) {
   return (
     <div className="space-y-4 rounded-2xl border border-line bg-white/[0.02] p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="eyebrow">Пост в X</div>
+        <div className="eyebrow">Пост</div>
         <div className="flex items-center gap-2">
           <FormatBadge id={task.format} />
           <VerdictBadge verdict={verdict} />
         </div>
       </div>
+
+      <WhereFields task={task} />
 
       <Field label="Рубрика">
         <Pills
@@ -226,7 +251,7 @@ export function PostFields({ task }: { task: Task }) {
       </Field>
 
       <div className="grid gap-4 sm:grid-cols-[1fr_140px]">
-        <Field label="Модель" hint="точно, как у вендора">
+        <Field label="Модель">
           <input
             key={task.id + ":model"}
             defaultValue={task.model ?? ""}
@@ -261,7 +286,7 @@ export function PostFields({ task }: { task: Task }) {
         />
       </Field>
 
-      <Field label="Первый комментарий" hint="промпт, файлы, ссылка">
+      <Field label="Первый комментарий">
         <textarea
           key={task.id + ":reply"}
           defaultValue={task.firstReply ?? ""}
@@ -275,7 +300,7 @@ export function PostFields({ task }: { task: Task }) {
       </Field>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Референсы" hint="по одному в строке">
+        <Field label="Референсы">
           <textarea
             key={task.id + ":refs"}
             defaultValue={(task.refs ?? []).join("\n")}
@@ -322,7 +347,7 @@ export function PostFields({ task }: { task: Task }) {
         <LintList task={task} all={all} />
       </Field>
 
-      <Field label="Ссылка на вышедший пост" hint="вставил = пост вышел, задача закрыта">
+      <Field label="Ссылка на вышедший пост">
         <input
           key={task.id + ":url"}
           defaultValue={task.postUrl ?? ""}
@@ -360,6 +385,55 @@ export function PostFields({ task }: { task: Task }) {
           </div>
         </Field>
       )}
+    </div>
+  );
+}
+
+/** Где выходит пост: основная соцсеть (с неё снимаем метрики) и куда дублируем. */
+function WhereFields({ task }: { task: Task }) {
+  const { db } = useApp();
+  const main: ChannelId = task.channelId ?? "x";
+  const also = task.alsoTo ?? [];
+  const chip = (c: ChannelId, on: boolean) => (
+    <span className="inline-flex items-center gap-1.5">
+      <span style={{ color: on ? CHANNELS[c].color : undefined }}>
+        <ChannelGlyph id={c} size={13} />
+      </span>
+      {CHANNELS[c].name}
+      {c === main && accountsOf(db.channels[c])[0] && <span className="text-muted">{accountsOf(db.channels[c])[0].handle}</span>}
+    </span>
+  );
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      <Field label="Где выходит">
+        <Pills
+          label="Где выходит"
+          value={main}
+          onChange={(c) => updateTask(task.id, { channelId: c, alsoTo: also.filter((x) => x !== c) })}
+          options={CHANNEL_IDS.map((c) => ({ value: c, label: chip(c, c === main) }))}
+        />
+      </Field>
+      <Field label="Дубль">
+        <div className="inline-flex flex-wrap items-center gap-1.5">
+          {CHANNEL_IDS.filter((c) => c !== main).map((c) => {
+            const on = also.includes(c);
+            return (
+              <button
+                key={c}
+                type="button"
+                aria-pressed={on}
+                onClick={() => updateTask(task.id, { alsoTo: on ? also.filter((x) => x !== c) : [...also, c] })}
+                className={cx(
+                  "press inline-flex h-8 items-center gap-1.5 rounded-[10px] border px-3 text-[13.5px] font-medium",
+                  on ? "border-accent/50 bg-accent/[0.12] text-ink" : "border-white/10 bg-white/[0.035] text-muted hover:border-white/20 hover:text-ink",
+                )}
+              >
+                {chip(c, on)}
+              </button>
+            );
+          })}
+        </div>
+      </Field>
     </div>
   );
 }

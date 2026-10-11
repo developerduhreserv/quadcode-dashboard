@@ -3,7 +3,7 @@
 import { AlertTriangle, Bookmark, ChevronLeft, ChevronRight, Link2, Plus, Radar, Trash2, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useShell } from "@/components/AppShell";
-import { FormatBadge, VerdictBadge } from "@/components/post";
+import { FormatBadge, VerdictBadge, Where } from "@/components/post";
 import { Avatar, Button, Empty, IconButton, Meter, Modal, PageHead, Panel, Pills, cx, fieldClass, toast } from "@/components/ui";
 import { addDays, dayKey, shortDate, startOfDay } from "@/lib/analytics";
 import {
@@ -69,8 +69,6 @@ export default function PlanPage() {
     <div className="stagger">
       <PageHead
         title="План"
-        purpose="Какие посты выходят на неделе. Два слота в день: 15:00 и 23:00. Каждый слот — один пост в X."
-        steps={["Заполнить пустые дни", "Открыть слот: рубрика, модель, текст, реплай", "Вышла модель → «Релиз» → «Протокол»"]}
         right={
           <>
             <Button onClick={() => setRelease("new")}>
@@ -97,19 +95,15 @@ export default function PlanPage() {
             <ChevronRight size={18} />
           </IconButton>
         </div>
-        <span className="flex items-center gap-3 text-[12.5px] text-muted">
-          <span className="inline-flex items-center gap-1.5"><span className="size-1.5 rounded-full bg-good" />готов</span>
-          <span className="inline-flex items-center gap-1.5 text-crit"><AlertTriangle size={11} />не готов</span>
-          <span>{weekPosts.length} постов на неделе</span>
-        </span>
+        <span className="text-[12.5px] text-muted">{weekPosts.length} постов</span>
       </div>
 
       <WeekGrid days={days} byDay={byDay} today={today} releases={releases} all={all} median={median} />
 
       <div className="mt-5 grid gap-4 lg:grid-cols-[1.4fr_1fr]">
-        <Panel eyebrow="Радар релизов" title="Новые модели" hint="Вышла модель — пост за 24 часа. Кнопка «Протокол» сама ставит 5 постов на 10 дней.">
+        <Panel title="Релизы моделей">
           {releases.length === 0 ? (
-            <Empty title="Релизов нет">Добавьте дату релиза или слух: кнопка «Релиз».</Empty>
+            <Empty title="Релизов нет" />
           ) : (
             <ul className="space-y-2">
               {releases.map((r) => {
@@ -175,7 +169,7 @@ export default function PlanPage() {
           )}
         </Panel>
 
-        <Panel eyebrow="Баланс недели" title="Хватает ли нужных постов" hint="60% на охват, 25% на вовлечение, 15% на продажу. Считается по выбранной неделе.">
+        <Panel title="Баланс недели">
           <div className="space-y-3">
             {(Object.keys(QUOTA) as FormatGroup[]).map((g) => {
               const q = quota[g];
@@ -200,9 +194,9 @@ export default function PlanPage() {
                 </div>
               );
             })}
-            <p className="pt-1 text-[12.5px] text-muted">
-              Без рубрики: {weekPosts.filter((t) => !t.format || t.format === "other").length}. Такие слоты не выходят.
-            </p>
+            {weekPosts.some((t) => !t.format || t.format === "other") && (
+              <p className="pt-1 text-[12.5px] text-crit">Без рубрики: {weekPosts.filter((t) => !t.format || t.format === "other").length}</p>
+            )}
           </div>
         </Panel>
       </div>
@@ -306,7 +300,10 @@ function SlotCard({ task, all, median, onOpen }: { task: Task; all: Task[]; medi
       )}
     >
       <div className="mb-1.5 flex items-center justify-between gap-2">
-        <span className="font-mono text-[11.5px] text-muted">{task.time ?? "—"}</span>
+        <span className="flex min-w-0 items-center gap-2 text-[11.5px] text-muted">
+          <span className="font-mono">{task.time ?? "—"}</span>
+          <Where task={task} compact />
+        </span>
         <div className="flex items-center gap-1">
           {published ? (
             <VerdictBadge verdict={verdict ?? "ok"} size="xs" />

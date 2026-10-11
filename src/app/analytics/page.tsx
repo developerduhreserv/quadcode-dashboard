@@ -6,7 +6,6 @@ import { FormatBadge, VerdictBadge } from "@/components/post";
 import { Empty, PageHead, Panel, Pills, Tile, cx } from "@/components/ui";
 import { shortDate } from "@/lib/analytics";
 import {
-  FORMATS,
   THRESHOLD,
   fmtNum,
   isPost,
@@ -71,8 +70,6 @@ export default function ResultsPage() {
     <div className="stagger space-y-4">
       <PageHead
         title="Результаты"
-        purpose="Что сработало и что нет. Хиты повторяем и превращаем в страницу на games, умершие рубрики закрываем."
-        steps={["Посмотреть вердикты", "Хит → тред «как построено» и страница", "Умер 3 раза подряд в рубрике → рубрику убрать"]}
         right={
           <Pills
             label="Период"
@@ -94,9 +91,9 @@ export default function ResultsPage() {
         <Tile label="Хиты / умерли" value={`${hits} / ${dead}`} sub="хит ≥ 3× медианы" />
       </div>
 
-      <Panel eyebrow="Посты" title="Все вышедшие" hint={`Красное — ниже порога: like < ${pct(THRESHOLD.likeRate, 1)}, reply < ${pct(THRESHOLD.replyRate)}, закладки < ${pct(THRESHOLD.bookmarkDuel, 1)}. Клик открывает пост.`}>
+      <Panel title="Вышедшие посты">
         {posts.length === 0 ? (
-          <Empty title="Пока ничего не вышло">Когда вставите ссылку на вышедший пост, он появится здесь.</Empty>
+          <Empty title="Пока ничего не вышло" />
         ) : (
           <div className="-mx-2 overflow-x-auto">
             <table className="w-full min-w-[720px] text-[13px]">
@@ -121,9 +118,9 @@ export default function ResultsPage() {
         )}
       </Panel>
 
-      <Panel eyebrow="Рубрики" title="Что ставить чаще" hint="Медиана views по рубрике за период. Верхние — в план чаще, нижние — переупаковать.">
+      <Panel title="Рубрики по медиане views">
         {byFormat.length === 0 ? (
-          <Empty title="Нет данных">Нужны метрики хотя бы по 3–5 постам.</Empty>
+          <Empty title="Нет данных" />
         ) : (
           <ul className="space-y-2.5">
             {byFormat.map(({ f, n, median: m }) => (
@@ -141,7 +138,6 @@ export default function ResultsPage() {
             ))}
           </ul>
         )}
-        <p className="mt-3 text-[12px] text-muted">Число после точки — сколько постов в выборке. {FORMATS.other.hint}</p>
       </Panel>
     </div>
   );

@@ -61,7 +61,6 @@ export default function DocsPage() {
     <div className="stagger space-y-4">
       <PageHead
         title="Правила"
-        purpose="Как мы делаем посты: рубрики, пороги, протокол релиза, чеклист перед публикацией, на кого смотрим. Открывайте, когда сомневаетесь."
         right={
           <>
           <Button onClick={allDocs} disabled={!docs.length}>
@@ -111,9 +110,9 @@ export default function DocsPage() {
         }}
         className={cx("rounded-[22px] transition-shadow", drag && "shadow-[0_0_0_2px_var(--accent)]")}
       >
-        <Panel eyebrow="Документы" title={`Всего: ${docs.length}`} hint="Перетащите сюда файлы .md, .txt или .csv">
+        <Panel title={`Документы: ${docs.length}`}>
           {docs.length === 0 ? (
-            <Empty title="Документов пока нет">Загрузите офферы, инструкции и выгрузки или создайте отчёт кнопкой выше.</Empty>
+            <Empty title="Документов пока нет" />
           ) : (
             <ul className="-mx-2 divide-y divide-line">
               {docs.map((d) => (

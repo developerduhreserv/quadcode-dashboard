@@ -6,11 +6,12 @@ import { useMemo } from "react";
 import type { ReactNode } from "react";
 import { useShell } from "@/components/AppShell";
 import { DailyStrip } from "@/components/daily";
-import { FormatBadge, VerdictBadge } from "@/components/post";
+import { VerdictBadge, Where } from "@/components/post";
 import { QuickCapture, TaskRow, sortOpen } from "@/components/tasks";
 import { Empty, PageHead, Panel, cx } from "@/components/ui";
 import { dayKey, shortDate, weekdayIndex, weekdayName } from "@/lib/analytics";
 import {
+  FORMATS,
   STAGE_LABEL,
   WINDOW_LABEL,
   fmtNum,
@@ -29,7 +30,7 @@ import { useApp } from "@/lib/store";
 import type { Task } from "@/lib/types";
 
 /**
- * «Сегодня»: только то, что надо сделать сегодня, по порядку.
+ * «Сегодня»: посты дня, метрики к снятию, рутина, остальные задачи. Без пояснений.
  * Планирование — во вкладке «План», цифры — в «Результатах».
  */
 export default function TodayPage() {
@@ -57,7 +58,6 @@ export default function TodayPage() {
     <div className="stagger space-y-4">
       <PageHead
         title="Сегодня"
-        purpose="Что сделать сегодня. Идите сверху вниз: выпустить посты, снять метрики, пройти рутину."
         right={
           <span className="font-mono text-[12px] uppercase tracking-[0.12em] text-muted">
             {weekdayName(weekdayIndex(now))}, {shortDate(now)}
@@ -78,7 +78,7 @@ export default function TodayPage() {
         </Link>
       )}
 
-      <Panel eyebrow="Шаг 1" title="Выпустить посты" hint="Откройте пост, исправьте красное, опубликуйте и вставьте ссылку. Первый час отвечайте на реплаи." right={<More href="/plan">План</More>}>
+      <Panel title="Посты" right={<More href="/plan">План</More>}>
         {todayPosts.length ? (
           <ul className="-mx-2 space-y-0.5">
             {todayPosts.map((t) => (
@@ -88,30 +88,25 @@ export default function TodayPage() {
             ))}
           </ul>
         ) : (
-          <Empty title="Сегодня постов нет">Добавьте слот во вкладке «План».</Empty>
+          <Empty title="Сегодня постов нет" />
         )}
       </Panel>
 
-      <Panel eyebrow="Шаг 2" title="Снять метрики" hint="Цифры из X Analytics: views, лайки, реплаи, репосты, закладки. Без них нет вердикта." right={<More href="/analytics">Результаты</More>}>
-        {metricsDue.length ? (
+      {metricsDue.length > 0 && (
+        <Panel title="Снять метрики" right={<More href="/analytics">Результаты</More>}>
           <ul className="-mx-2 space-y-0.5">
             {metricsDue.map(({ t, h }) => (
               <PostRow key={t.id} task={t} onOpen={() => shell.openTask(t.id)}>
-                <span className="font-mono rounded-md border border-warn/40 bg-warn/10 px-1.5 py-px text-[11px] text-warn">нужен {snapshotLabel(h)}</span>
+                <span className="font-mono rounded-md border border-warn/40 bg-warn/10 px-1.5 py-px text-[11px] text-warn">{snapshotLabel(h)}</span>
               </PostRow>
             ))}
           </ul>
-        ) : (
-          <Empty title="Всё снято">Новые отметки появятся через 1, 6, 24 часа, 3 и 7 дней после выхода.</Empty>
-        )}
-      </Panel>
+        </Panel>
+      )}
 
-      <div>
-        <div className="eyebrow mb-2 px-1">Шаг 3 · Рутина</div>
-        <DailyStrip />
-      </div>
+      <DailyStrip />
 
-      <Panel eyebrow="Остальное" title="Другие задачи" hint="Всё, что не пост: монтаж, гайды, площадки." right={<More href="/tasks">Все задачи</More>}>
+      <Panel title="Задачи" right={<More href="/tasks">Все</More>}>
         <div className="mb-3">
           <QuickCapture />
         </div>
@@ -121,9 +116,7 @@ export default function TodayPage() {
               <TaskRow key={t.id} task={t} members={db.members} onOpen={shell.openTask} />
             ))}
           </div>
-        ) : (
-          <Empty title="Пусто">Других задач нет.</Empty>
-        )}
+        ) : null}
       </Panel>
     </div>
   );
@@ -137,13 +130,14 @@ function PostRow({ task, onOpen, children }: { task: Task; onOpen: () => void; c
         onClick={onOpen}
         className="flex w-full items-center gap-3 rounded-xl px-2 py-2.5 text-left transition-colors duration-200 hover:bg-white/[0.04]"
       >
-        <span className="w-11 shrink-0 font-mono text-[12.5px] text-muted">{task.time ?? "—"}</span>
-        <span className="hidden shrink-0 sm:block">
-          <FormatBadge id={task.format} size="xs" />
-        </span>
+        <span className="w-11 shrink-0 self-start pt-px font-mono text-[12.5px] text-muted">{task.time ?? "—"}</span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[14px] text-ink">{task.title}</span>
-          {task.model && <span className="block truncate text-[12px] text-muted">{task.model}</span>}
+          <span className="mt-0.5 flex min-w-0 items-center gap-2 text-[12px] text-muted">
+            <Where task={task} />
+            {task.format && task.format !== "other" && <span className="hidden truncate sm:inline">{FORMATS[task.format].code} {FORMATS[task.format].name}</span>}
+            {task.model && <span className="truncate">{task.model}</span>}
+          </span>
         </span>
         <span className="shrink-0">{children}</span>
       </button>

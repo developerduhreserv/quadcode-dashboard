@@ -195,8 +195,6 @@ export function ChannelView({ id }: { id: ChannelId }) {
     <div className="stagger space-y-4">
       <PageHead
         title="Площадки"
-        purpose="Куда разносим вышедшие посты: сабреддиты, Discord-серверы, Threads, аккаунты X для реплаев. Один список на площадку."
-        steps={["Выбрать площадку", "Нажать «Текст» и скопировать", "Запостить и поставить галочку"]}
       />
       <nav className="flex gap-2 overflow-x-auto pb-1" aria-label="Площадки">
         {CHANNEL_IDS.map((c) => {
@@ -338,11 +336,6 @@ export function ChannelView({ id }: { id: ChannelId }) {
       <Panel
         eyebrow="Рассылка"
         title={`Список: ${targets.length} ${plural(targets.length, meta.target)}`}
-        hint={
-          cycle
-            ? "Галочка значит «писали в этом круге». Этап и аналитика не сбрасываются"
-            : "Галочка ставит отметку «отправлено» и попадает в аналитику"
-        }
         right={
           <div className="flex w-full flex-wrap items-start gap-x-3 gap-y-4 sm:w-auto">
             {/* Один общий таймер на весь список. На телефоне пилюля на всю ширину прямо над списком */}

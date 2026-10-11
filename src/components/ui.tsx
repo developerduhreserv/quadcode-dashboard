@@ -422,6 +422,15 @@ export function ChannelIcon({ id, size = 28 }: { id: ChannelId; size?: number })
   );
 }
 
+/** Голый логотип соцсети в цвет текста: для строк и чипов. */
+export function ChannelGlyph({ id, size = 14, className }: { id: ChannelId; size?: number; className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="currentColor" aria-hidden className={cx("shrink-0", className)}>
+      <path d={ICON_PATH[id]} />
+    </svg>
+  );
+}
+
 export function ChannelChip({ id }: { id: ChannelId | null }) {
   if (!id) return null;
   return (
@@ -540,43 +549,14 @@ export function Logo({ size = 26 }: { size?: number }) {
   );
 }
 
-/**
- * Шапка вкладки: зачем она нужна и что тут делать по шагам.
- * Одинаковая на всех вкладках, чтобы новый человек понял экран за 5 секунд.
- */
-export function PageHead({
-  title,
-  purpose,
-  steps,
-  right,
-}: {
-  title: string;
-  purpose: string;
-  steps?: string[];
-  right?: ReactNode;
-}) {
+/** Шапка вкладки: заголовок и кнопки. Без пояснений: экран должен читаться сам. */
+export function PageHead({ title, right }: { title: string; right?: ReactNode }) {
   return (
     <header className="mb-6 pt-2">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="font-display text-[34px] font-medium leading-none sm:text-[42px]">{title}</h1>
-          <p className="mt-2.5 max-w-[680px] text-[15px] leading-relaxed text-ink-2">{purpose}</p>
-        </div>
+        <h1 className="font-display min-w-0 text-[34px] font-medium leading-none sm:text-[42px]">{title}</h1>
         {right && <div className="flex shrink-0 gap-2">{right}</div>}
       </div>
-      {steps && steps.length > 0 && (
-        <ol className="mt-4 flex flex-wrap gap-2">
-          {steps.map((s, i) => (
-            <li
-              key={s}
-              className="inline-flex items-center gap-2 rounded-lg border border-line bg-white/[0.03] px-2.5 py-1.5 text-[13px] text-ink-2"
-            >
-              <span className="font-mono text-[11px] text-accent-soft">{i + 1}</span>
-              {s}
-            </li>
-          ))}
-        </ol>
-      )}
     </header>
   );
 }

@@ -42,6 +42,7 @@ export function useShell(): Shell {
 const NAV = [
   { href: "/", label: "Сегодня", match: (p: string) => p === "/" },
   { href: "/plan", label: "План", match: (p: string) => p.startsWith("/plan") },
+  { href: "/pulse", label: "Пульс", match: (p: string) => p.startsWith("/pulse") },
   { href: "/analytics", label: "Результаты", match: (p: string) => p.startsWith("/analytics") },
   { href: "/channels/reddit", label: "Площадки", match: (p: string) => p.startsWith("/channels") },
   { href: "/tasks", label: "Задачи", match: (p: string) => p.startsWith("/tasks") },

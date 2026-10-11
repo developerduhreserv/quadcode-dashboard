@@ -28,6 +28,8 @@ import type {
   MetricSnapshot,
   Doc,
   Priority,
+  PulseDigest,
+  PulseSources,
   Release,
   Row,
   Stage,
@@ -696,6 +698,24 @@ export function setMe(id: string | null) {
     else localStorage.removeItem(ME_KEY);
   } catch {}
   set({ me: id });
+}
+
+// ───────────── Пульс ─────────────
+
+export function savePulseSources(sources: PulseSources) {
+  commit([{ kind: "pulse", id: "sources", data: sources }]);
+}
+
+export function savePulseDigest(digest: PulseDigest) {
+  commit([{ kind: "pulse", id: "digest", data: digest }]);
+}
+
+/** Черновик ответа на пост по его ссылке. Пустой текст удаляет черновик. */
+export function savePulseReply(url: string, draft: string) {
+  const replies = { ...(state.db.pulse.replies ?? {}) };
+  if (draft.trim()) replies[url] = draft;
+  else delete replies[url];
+  commit([{ kind: "pulse", id: "replies", data: replies }]);
 }
 
 export function updateMeta(patch: Partial<Meta>) {

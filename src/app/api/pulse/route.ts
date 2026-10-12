@@ -20,6 +20,7 @@ export async function POST(request: Request) {
     xAccounts: list(s.xAccounts ?? DEFAULT_SOURCES.xAccounts, 40),
     xQueries: list(s.xQueries ?? DEFAULT_SOURCES.xQueries, 5),
     xPosts: list(s.xPosts, 80),
+    threadsQueries: list(s.threadsQueries ?? DEFAULT_SOURCES.threadsQueries, 5),
     subreddits: list(s.subreddits ?? DEFAULT_SOURCES.subreddits, 15),
     redditQueries: list(s.redditQueries ?? DEFAULT_SOURCES.redditQueries, 5),
     discordInvites: list(s.discordInvites, 20),

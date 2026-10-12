@@ -1,14 +1,14 @@
 "use client";
 
-import { Loader2, RefreshCw, Settings2, Sparkles } from "lucide-react";
+import { Loader2, RefreshCw, Settings2, Sparkles, WandSparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { InsightRow, ItemCard, ItemStats, ReplyBox, SourcesModal } from "@/components/pulse";
+import { InsightRow, ItemCard, ItemStats, ReplyBox, SourcesModal, requestDraft } from "@/components/pulse";
 import { Button, ChannelGlyph, Empty, IconButton, PageHead, Panel, Segments, cx, toast } from "@/components/ui";
 import { fmtNum, lastSnapshot, medianViews, verdictOf } from "@/lib/content";
 import { useNow } from "@/lib/hooks";
 import { NETWORK_NAME, fmtAgo, median, ruleDigest, sourcesOf, trackedTweets, weight } from "@/lib/pulse";
 import type { PulseFeed } from "@/lib/pulse";
-import { savePulseDigest, useApp } from "@/lib/store";
+import { savePulseDigest, savePulseReply, useApp } from "@/lib/store";
 import { PULSE_NETWORKS } from "@/lib/types";
 import type { PulseDigest, PulseItem, PulseNetwork } from "@/lib/types";
 
@@ -55,6 +55,7 @@ export default function PulsePage() {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [more, setMore] = useState(false);
+  const [auto, setAuto] = useState<{ done: number; total: number } | null>(null);
 
   const sources = useMemo(() => sourcesOf(db), [db]);
   const tasks = useMemo(() => Object.values(db.tasks), [db.tasks]);
@@ -64,12 +65,18 @@ export default function PulsePage() {
   const items = useMemo(() => feed?.items ?? [], [feed]);
   const shown = net === "all" ? items : items.filter((i) => i.network === net);
   const hot = useMemo(() => shown.filter((i) => i.kind === "post").sort((a, b) => weight(b) - weight(a)), [shown]);
-  const talk = useMemo(() => shown.filter((i) => i.kind === "mention" || i.kind === "message").sort((a, b) => b.at - a.at), [shown]);
+  // Сначала те, кому ещё не ответили, внутри по свежести
+  const sent = db.pulse.sent;
+  const talk = useMemo(
+    () => shown.filter((i) => i.kind === "mention" || i.kind === "message").sort((a, b) => Number(!!sent?.[a.url]) - Number(!!sent?.[b.url]) || b.at - a.at),
+    [shown, sent],
+  );
+  const waiting = talk.filter((i) => !sent?.[i.url]);
   const servers = useMemo(() => shown.filter((i) => i.kind === "server").sort((a, b) => b.likes - a.likes), [shown]);
 
   // Сохранённая сводка или посчитанная на лету по правилам, чтобы блок не пустовал
   const saved = db.pulse.digest;
-  const digest: PulseDigest | null = useMemo(() => saved ?? (items.length ? ruleDigest(items, tasks, me) : null), [saved, items, tasks, me]);
+  const digest: PulseDigest | null = useMemo(() => saved ?? (items.length ? ruleDigest(items, tasks, me, sent) : null), [saved, items, tasks, me, sent]);
   const insights = digest ? (net === "all" ? digest.insights : digest.insights.filter((i) => i.network === net || i.network === "all")) : [];
 
   const collect = async () => {
@@ -88,7 +95,7 @@ export default function PulsePage() {
         body: JSON.stringify({ items: [...items].sort((a, b) => weight(b) - weight(a)).slice(0, 80), ours, releases: db.meta.releases ?? [] }),
       });
       if (res.status === 501) {
-        savePulseDigest(ruleDigest(items, tasks, me));
+        savePulseDigest(ruleDigest(items, tasks, me, sent));
         toast("Claude не подключён, сводка по правилам", 2600);
       } else {
         const j = (await res.json()) as Omit<PulseDigest, "at" | "by"> & { error?: string };
@@ -99,6 +106,24 @@ export default function PulsePage() {
       toast("Сеть недоступна", 2000, { wait: true });
     }
     setBusy(false);
+  };
+
+  /** Автореплаер: черновики всем, кому ещё не ответили. Отправка остаётся за человеком, по одному клику. */
+  const autoReply = async () => {
+    const queue = waiting.filter((i) => !db.pulse.replies?.[i.url]).slice(0, 12);
+    if (!queue.length) return toast("Черновики уже есть у всех", 1800);
+    setAuto({ done: 0, total: queue.length });
+    let done = 0;
+    for (const i of queue) {
+      const r = await requestDraft(i);
+      if (r.noKey) {
+        toast("Для автореплаера нужен ANTHROPIC_API_KEY", 2600, { wait: true });
+        break;
+      }
+      if (r.draft) savePulseReply(i.url, r.draft);
+      setAuto({ done: ++done, total: queue.length });
+    }
+    setAuto(null);
   };
 
   const keys = feed?.keys ?? null;
@@ -144,9 +169,9 @@ export default function PulsePage() {
       />
 
       {net === "all" && (
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {PULSE_NETWORKS.map((n) => (
-            <NetworkTile key={n} net={n} items={items.filter((i) => i.network === n)} live={keys?.[n] ?? false} onOpen={() => setNet(n)} onSetup={() => setEditing(true)} />
+            <NetworkTile key={n} net={n} items={items.filter((i) => i.network === n)} sent={sent} live={keys?.[n] ?? false} onOpen={() => setNet(n)} onSetup={() => setEditing(true)} />
           ))}
         </div>
       )}
@@ -215,12 +240,22 @@ export default function PulsePage() {
               )}
             </div>
           ) : (
-            <Empty title={loading ? "Загрузка" : "Пусто"}>{net === "reddit" && keys && !keys.reddit ? "Reddit без ключа не отдаёт данные" : null}</Empty>
+            <Empty title={loading ? "Загрузка" : "Пусто"}>{(net === "reddit" || net === "threads") && keys && !keys[net] ? `${NETWORK_NAME[net]} без ключа не отдаёт данные` : null}</Empty>
           )}
         </Panel>
 
         <div className="space-y-4">
-          <Panel title="Что пишут">
+          <Panel
+            title={waiting.length ? `Что пишут · ${waiting.length}` : "Что пишут"}
+            right={
+              waiting.length > 0 && (
+                <Button className="h-9 px-3.5 text-[13px]" onClick={autoReply} disabled={!!auto}>
+                  {auto ? <Loader2 size={14} className="animate-spin" /> : <WandSparkles size={14} />}
+                  {auto ? `${auto.done} из ${auto.total}` : "Автоответ"}
+                </Button>
+              )
+            }
+          >
             {talk.length ? (
               <div className="space-y-2">
                 {talk.slice(0, 12).map((i) => (
@@ -230,7 +265,7 @@ export default function PulsePage() {
                 ))}
               </div>
             ) : (
-              <Empty title="Пусто">{keys && !keys.x && !keys.reddit && !keys.discord ? "Упоминания появятся с ключами X, Reddit или Discord" : null}</Empty>
+              <Empty title="Пусто">{keys && !keys.x && !keys.threads && !keys.reddit && !keys.discord ? "Упоминания появятся с ключами X, Threads, Reddit или Discord" : null}</Empty>
             )}
           </Panel>
 
@@ -263,11 +298,27 @@ export default function PulsePage() {
 }
 
 /** Плитка соцсети: главное число, лидер, клик открывает её ленту. */
-function NetworkTile({ net, items, live, onOpen, onSetup }: { net: PulseNetwork; items: PulseItem[]; live: boolean; onOpen: () => void; onSetup: () => void }) {
-  const posts = items.filter((i) => i.kind === "post" && !i.ours);
+function NetworkTile({
+  net,
+  items,
+  sent,
+  live,
+  onOpen,
+  onSetup,
+}: {
+  net: PulseNetwork;
+  items: PulseItem[];
+  sent?: Record<string, number>;
+  live: boolean;
+  onOpen: () => void;
+  onSetup: () => void;
+}) {
+  // Чужие посты важнее, но если их нет (Threads без поиска), считаем по нашим
+  const others = items.filter((i) => i.kind === "post" && !i.ours);
+  const posts = others.length ? others : items.filter((i) => i.kind === "post");
   const top = [...posts].sort((a, b) => weight(b) - weight(a))[0];
   const servers = items.filter((i) => i.kind === "server");
-  const mentions = items.filter((i) => i.kind === "mention" || i.kind === "message").length;
+  const mentions = items.filter((i) => (i.kind === "mention" || i.kind === "message") && !sent?.[i.url]).length;
 
   let value: string;
   let sub: string;
@@ -277,7 +328,7 @@ function NetworkTile({ net, items, live, onOpen, onSetup }: { net: PulseNetwork;
     sub = servers.length ? `онлайн на ${servers.length} серв.` : "серверы не добавлены";
   } else if (!posts.length) {
     value = "—";
-    sub = net === "reddit" && !live ? "нужен ключ Reddit" : "нет данных";
+    sub = (net === "reddit" || net === "threads") && !live ? `нужен ключ ${NETWORK_NAME[net]}` : "нет данных";
   } else {
     value = fmtNum(Math.round(median(posts.map((p) => p.likes))));
     sub = `${net === "reddit" ? "↑" : "♥"} медиана, ${posts.length} постов`;
@@ -295,11 +346,11 @@ function NetworkTile({ net, items, live, onOpen, onSetup }: { net: PulseNetwork;
           <ChannelGlyph id={net} size={14} />
         </span>
         {NETWORK_NAME[net]}
-        {mentions > 0 && <span className="font-mono ml-auto rounded-md border border-accent/35 bg-accent/[0.1] px-1.5 text-[11px] text-accent-soft">{mentions} пишут</span>}
+        {mentions > 0 && <span className="font-mono ml-auto rounded-md border border-accent/35 bg-accent/[0.1] px-1.5 text-[11px] text-accent-soft">{mentions} ждут ответа</span>}
       </div>
       <div className={cx("font-display mt-2 text-[28px] font-medium leading-none", empty ? "text-muted" : "text-ink")}>{value}</div>
       <div className="mt-1.5 truncate text-[12.5px] text-muted">{sub}</div>
-      {top && <div className="mt-1 truncate text-[12.5px] text-ink-2">Топ: {net === "x" ? `@${top.author}` : top.source}</div>}
+      {top && <div className="mt-1 truncate text-[12.5px] text-ink-2">Топ: {net === "x" || net === "threads" ? `@${top.author}` : top.source}</div>}
     </button>
   );
 }

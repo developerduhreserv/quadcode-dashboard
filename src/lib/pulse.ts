@@ -3,6 +3,7 @@
  * источники по умолчанию, какие твиты отслеживаем, вес поста и сводка по правилам без AI.
  */
 import { fmtNum, lastSnapshot, medianViews, verdictOf } from "./content";
+import { plural } from "./meta";
 import type { DB, PulseDigest, PulseInsight, PulseItem, PulseNetwork, PulseSources, Task } from "./types";
 
 /** Наш аккаунт в X: его посты помечаем как свои. */
@@ -13,13 +14,22 @@ export const DEFAULT_SOURCES: PulseSources = {
   xAccounts: ["higgsfield_ai", "Magnific_AI", "ManusAI_HQ", "MengTo", "chongdashu", "DannyLimanseta", "shneural", "AiBattle_", "xikhar"],
   xQueries: ['"vs" (Claude OR GPT OR Gemini OR Grok) game -is:retweet', "(unreal OR unity OR blender) AI prompt game -is:retweet"],
   xPosts: [],
+  threadsQueries: ["AI game dev", "Claude vs GPT"],
   subreddits: ["aivideo", "gamedev", "unrealengine", "Unity3D", "blender", "aigamedev"],
   redditQueries: ["quadcode", "AI game dev"],
   discordInvites: [],
   discordChannels: [],
 };
 
-export const NETWORK_NAME: Record<PulseNetwork, string> = { x: "X", reddit: "Reddit", discord: "Discord" };
+export const NETWORK_NAME: Record<PulseNetwork, string> = { x: "X", threads: "Threads", reddit: "Reddit", discord: "Discord" };
+
+/** ID поста в своей сети из id элемента: «x:123» → «123». */
+export const nativeId = (i: PulseItem) => i.id.slice(i.id.indexOf(":") + 1);
+
+/** Окно ответа в X с готовым текстом: человек жмёт «Ответить», API на запись не нужен. */
+export function xReplyIntent(tweet: string, text: string): string {
+  return `https://x.com/intent/post?in_reply_to=${tweet}&text=${encodeURIComponent(text)}`;
+}
 
 export function sourcesOf(db: DB): PulseSources {
   return { ...DEFAULT_SOURCES, ...(db.pulse.sources ?? {}) };
@@ -76,7 +86,7 @@ const isDuel = (i: PulseItem) => /\bvs\.?\b|versus|same prompt/i.test(`${i.title
  * Сводка по правилам, когда AI недоступен: что заходит, кто лидирует, что у нас.
  * Короткие выводы с действием, без воды.
  */
-export function ruleDigest(items: PulseItem[], tasks: Task[], me: string | null): PulseDigest {
+export function ruleDigest(items: PulseItem[], tasks: Task[], me: string | null, sent: Record<string, number> = {}): PulseDigest {
   const out: PulseInsight[] = [];
   const posts = items.filter((i) => i.kind === "post" && !i.ours);
   const x = posts.filter((i) => i.network === "x");
@@ -116,6 +126,18 @@ export function ruleDigest(items: PulseItem[], tasks: Task[], me: string | null)
     if (lead) out.push({ network: "x", title: `Стабильнее всех @${lead[0]}`, detail: `Медиана ${fmtNum(Math.round(median(lead[1])))} ♥ на ${lead[1].length} постах`, action: "Смотреть его посты первыми" });
   }
 
+  const ourThreads = items.filter((i) => i.network === "threads" && i.ours && i.kind === "post");
+  if (ourThreads.length >= 2) {
+    const best = [...ourThreads].sort((p, q) => weight(q) - weight(p))[0];
+    out.push({
+      network: "threads",
+      title: `Наш лучший пост в Threads: ${fmtNum(best.likes)} ♥`,
+      detail: `${fmtNum(best.views ?? 0)} просмотров. ${clip(best.text, 90)}`,
+      action: "Повторить подачу в X и Threads",
+      refs: [best.url],
+    });
+  }
+
   const reddit = posts.filter((i) => i.network === "reddit");
   if (reddit.length) {
     const bySub = new Map<string, number[]>();
@@ -143,8 +165,8 @@ export function ruleDigest(items: PulseItem[], tasks: Task[], me: string | null)
     });
   }
 
-  const asks = items.filter((i) => (i.kind === "mention" || i.kind === "message") && i.text.includes("?"));
-  if (asks.length) out.push({ network: asks[0].network, title: `${asks.length} вопросов к нам без ответа`, detail: clip(asks[0].text, 90), action: "Ответить в первый час", refs: asks.slice(0, 3).map((i) => i.url) });
+  const asks = items.filter((i) => (i.kind === "mention" || i.kind === "message") && i.text.includes("?") && !sent[i.url]);
+  if (asks.length) out.push({ network: asks[0].network, title: `${asks.length} ${plural(asks.length, ["вопрос", "вопроса", "вопросов"])} к нам без ответа`, detail: clip(asks[0].text, 90), action: "Ответить в первый час", refs: asks.slice(0, 3).map((i) => i.url) });
 
   const ourMedian = medianViews(tasks);
   const ours = tasks.filter((t) => t.postUrl && lastSnapshot(t));
@@ -175,7 +197,7 @@ export function clip(s: string, n: number): string {
 export interface PulseFeed {
   items: PulseItem[];
   /** Что подключено на сервере */
-  keys: { x: boolean; reddit: boolean; discord: boolean; ai: boolean };
+  keys: { x: boolean; threads: boolean; reddit: boolean; discord: boolean; ai: boolean };
   errors: string[];
   at: number;
 }

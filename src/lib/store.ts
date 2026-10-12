@@ -718,6 +718,14 @@ export function savePulseReply(url: string, draft: string) {
   commit([{ kind: "pulse", id: "replies", data: replies }]);
 }
 
+/** Ответ отправлен (at) или отметка снята (null). */
+export function savePulseSent(url: string, at: number | null) {
+  const sent = { ...(state.db.pulse.sent ?? {}) };
+  if (at) sent[url] = at;
+  else delete sent[url];
+  commit([{ kind: "pulse", id: "sent", data: sent }]);
+}
+
 export function updateMeta(patch: Partial<Meta>) {
   commit([{ kind: "meta", id: "meta", data: { ...state.db.meta, ...patch } }]);
 }

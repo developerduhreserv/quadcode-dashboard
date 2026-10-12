@@ -246,7 +246,7 @@ export interface Meta {
 // ───────────── Пульс: что происходит в соцсетях ─────────────
 
 /** Соцсети, которые слушает «Пульс». */
-export const PULSE_NETWORKS = ["x", "reddit", "discord"] as const;
+export const PULSE_NETWORKS = ["x", "threads", "reddit", "discord"] as const;
 export type PulseNetwork = (typeof PULSE_NETWORKS)[number];
 
 /** Что слушаем. Общая настройка команды. */
@@ -257,6 +257,8 @@ export interface PulseSources {
   xQueries: string[];
   /** Отдельные твиты. Референсы из плана и наши вышедшие посты добавляются сами */
   xPosts: string[];
+  /** Поиск по Threads, нужен THREADS_ACCESS_TOKEN */
+  threadsQueries: string[];
   subreddits: string[];
   /** Поиск упоминаний по Reddit */
   redditQueries: string[];
@@ -321,6 +323,8 @@ export interface PulseStore {
   digest?: PulseDigest;
   /** Черновики ответов: url → текст */
   replies?: Record<string, string>;
+  /** Отправленные ответы: url → когда */
+  sent?: Record<string, number>;
 }
 
 export interface DB {

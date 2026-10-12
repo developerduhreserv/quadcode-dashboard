@@ -1,15 +1,15 @@
 "use client";
 
-import { ArrowBigUp, Check, Copy, ExternalLink, Eye, Heart, Loader2, MessageCircle, Play, Repeat2, Sparkles, Users } from "lucide-react";
+import { ArrowBigUp, Check, Copy, ExternalLink, Eye, Heart, Loader2, MessageCircle, Play, Repeat2, Send, Sparkles, Users } from "lucide-react";
 import { useState } from "react";
-import { NETWORK_NAME, clip, fmtAgo } from "@/lib/pulse";
+import { NETWORK_NAME, clip, fmtAgo, nativeId, xReplyIntent } from "@/lib/pulse";
 import { fmtNum } from "@/lib/content";
-import { savePulseReply, savePulseSources, useApp } from "@/lib/store";
+import { savePulseReply, savePulseSent, savePulseSources, useApp } from "@/lib/store";
 import type { PulseFeed } from "@/lib/pulse";
 import type { PulseInsight, PulseItem, PulseNetwork, PulseSources } from "@/lib/types";
 import { Button, ChannelGlyph, IconButton, Modal, cx, fieldClass, toast } from "./ui";
 
-const NET_COLOR: Record<PulseNetwork, string> = { x: "var(--c-x)", reddit: "var(--c-reddit)", discord: "var(--c-discord)" };
+const NET_COLOR: Record<PulseNetwork, string> = { x: "var(--c-x)", threads: "var(--c-threads)", reddit: "var(--c-reddit)", discord: "var(--c-discord)" };
 
 function Stat({ icon, value, title }: { icon: React.ReactNode; value: number; title: string }) {
   return (
@@ -44,7 +44,7 @@ export function ItemStats({ item }: { item: PulseItem }) {
 
 /** Карточка поста: клик открывает оригинал. */
 export function ItemCard({ item, now, children }: { item: PulseItem; now: number; children?: React.ReactNode }) {
-  const who = item.network === "x" ? `@${item.author}` : item.network === "reddit" ? `u/${item.author}` : item.author;
+  const who = item.network === "x" || item.network === "threads" ? `@${item.author}` : item.network === "reddit" ? `u/${item.author}` : item.author;
   return (
     <article className="rounded-xl border border-line bg-white/[0.03] transition-colors duration-300 hover:border-line-2 hover:bg-white/[0.05]">
       <a href={item.url} target="_blank" rel="noreferrer" className="block p-3">
@@ -70,31 +70,87 @@ export function ItemCard({ item, now, children }: { item: PulseItem; now: number
   );
 }
 
-/** Ответ на упоминание: черновик от Claude, правка, копирование. */
+/** Черновик ответа от Claude. noKey: на сервере нет ANTHROPIC_API_KEY. */
+export async function requestDraft(item: PulseItem): Promise<{ draft?: string; error?: string; noKey?: boolean }> {
+  try {
+    const res = await fetch("/api/pulse/reply", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(item) });
+    const j = (await res.json()) as { draft?: string; error?: string };
+    if (res.status === 501) return { noKey: true };
+    if (!res.ok || !j.draft) return { error: j.error ?? "Не получилось" };
+    return { draft: j.draft };
+  } catch {
+    return { error: "Сеть недоступна" };
+  }
+}
+
+const SEND_LABEL: Record<PulseNetwork, string> = { x: "Ответить в X", threads: "Отправить", reddit: "Скопировать и открыть", discord: "Скопировать и открыть" };
+
+/**
+ * Автореплаер на одном посте: черновик от Claude → правка → отправка в один клик.
+ * Threads публикует ответ сам через API, X открывает окно ответа с готовым текстом, остальные копируют текст и открывают пост.
+ */
 export function ReplyBox({ item }: { item: PulseItem }) {
   const { db } = useApp();
   const saved = db.pulse.replies?.[item.url] ?? "";
-  const [busy, setBusy] = useState(false);
+  const sentAt = db.pulse.sent?.[item.url];
+  const [busy, setBusy] = useState<"draft" | "send" | null>(null);
   const [copied, setCopied] = useState(false);
 
   const draft = async () => {
-    setBusy(true);
+    setBusy("draft");
+    const r = await requestDraft(item);
+    if (r.noKey) toast("Для ответов нужен ANTHROPIC_API_KEY", 2600, { wait: true });
+    else if (r.error) toast(r.error, 2600, { wait: true });
+    else if (r.draft) savePulseReply(item.url, r.draft);
+    setBusy(null);
+  };
+
+  const copyAndOpen = async () => {
+    await navigator.clipboard.writeText(saved).catch(() => {});
+    window.open(item.url, "_blank");
+    savePulseSent(item.url, Date.now());
+    toast("Текст скопирован", 1600);
+  };
+
+  const send = async () => {
+    if (item.network === "x") {
+      window.open(xReplyIntent(nativeId(item), saved), "_blank");
+      savePulseSent(item.url, Date.now());
+      return;
+    }
+    if (item.network !== "threads") return copyAndOpen();
+    setBusy("send");
     try {
-      const res = await fetch("/api/pulse/reply", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(item) });
-      const j = (await res.json()) as { draft?: string; error?: string };
-      if (res.status === 501) toast("Для ответов нужен ANTHROPIC_API_KEY", 2600, { wait: true });
-      else if (!res.ok || !j.draft) toast(j.error ?? "Не получилось", 2600, { wait: true });
-      else savePulseReply(item.url, j.draft);
+      const res = await fetch("/api/pulse/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ network: "threads", replyTo: nativeId(item), text: saved }) });
+      const j = (await res.json()) as { id?: string; error?: string };
+      if (res.status === 501) await copyAndOpen();
+      else if (!res.ok) toast(j.error ?? "Не отправилось", 3000, { wait: true });
+      else {
+        savePulseSent(item.url, Date.now());
+        toast("Ответ опубликован", 1600);
+      }
     } catch {
       toast("Сеть недоступна", 2000, { wait: true });
     }
-    setBusy(false);
+    setBusy(null);
   };
 
+  if (sentAt)
+    return (
+      <div className="flex items-center justify-between gap-2 border-t border-line px-3 py-2 text-[12.5px]">
+        <span className="inline-flex items-center gap-1.5 text-good">
+          <Check size={13} />
+          Отвечено, {fmtAgo(sentAt)}
+        </span>
+        <Button variant="ghost" className="h-7 px-2.5 text-[12px]" onClick={() => savePulseSent(item.url, null)}>
+          Снять
+        </Button>
+      </div>
+    );
   if (!saved)
     return (
       <div className="flex justify-end px-3 pb-2.5">
-        <Button variant="ghost" className="h-8 px-3 text-[13px]" onClick={draft} disabled={busy}>
+        <Button variant="ghost" className="h-8 px-3 text-[13px]" onClick={draft} disabled={!!busy}>
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
           Ответ
         </Button>
@@ -110,9 +166,9 @@ export function ReplyBox({ item }: { item: PulseItem }) {
         onBlur={(e) => e.target.value !== saved && savePulseReply(item.url, e.target.value)}
         className={cx(fieldClass, "resize-y text-[13.5px] leading-relaxed")}
       />
-      <div className="mt-1.5 flex items-center justify-end gap-1">
-        <IconButton label="Ещё вариант" onClick={draft} disabled={busy}>
-          {busy ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+      <div className="mt-2 flex items-center gap-1">
+        <IconButton label="Другой вариант" onClick={draft} disabled={!!busy}>
+          {busy === "draft" ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
         </IconButton>
         <IconButton
           label="Скопировать"
@@ -124,9 +180,10 @@ export function ReplyBox({ item }: { item: PulseItem }) {
         >
           {copied ? <Check size={14} className="text-good" /> : <Copy size={14} />}
         </IconButton>
-        <IconButton label="Открыть пост" onClick={() => window.open(item.url, "_blank")}>
-          <ExternalLink size={14} />
-        </IconButton>
+        <Button variant="primary" className="ml-auto h-8 px-3.5 text-[13px]" onClick={send} disabled={!!busy}>
+          {busy === "send" ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+          {SEND_LABEL[item.network]}
+        </Button>
       </div>
     </div>
   );
@@ -168,6 +225,7 @@ const FIELDS: { key: keyof PulseSources; net: PulseNetwork; label: string; place
   { key: "xAccounts", net: "x", label: "Watchlist X", placeholder: "higgsfield_ai", needs: "x" },
   { key: "xQueries", net: "x", label: "Поиск по X", placeholder: '"vs" Claude game -is:retweet', needs: "x" },
   { key: "xPosts", net: "x", label: "Отдельные твиты", placeholder: "https://x.com/…/status/…" },
+  { key: "threadsQueries", net: "threads", label: "Поиск по Threads", placeholder: "AI game dev", needs: "threads" },
   { key: "subreddits", net: "reddit", label: "Сабреддиты", placeholder: "aivideo", needs: "reddit" },
   { key: "redditQueries", net: "reddit", label: "Поиск по Reddit", placeholder: "quadcode", needs: "reddit" },
   { key: "discordInvites", net: "discord", label: "Discord-серверы", placeholder: "discord.gg/код" },
@@ -176,9 +234,10 @@ const FIELDS: { key: keyof PulseSources; net: PulseNetwork; label: string; place
 
 const ENV: Record<keyof PulseFeed["keys"], { name: string; vars: string }> = {
   x: { name: "X API: поиск, watchlist, упоминания, просмотры", vars: "X_BEARER_TOKEN" },
+  threads: { name: "Threads: наши посты, ответы, упоминания, поиск и отправка ответов", vars: "THREADS_ACCESS_TOKEN" },
   reddit: { name: "Reddit", vars: "REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET" },
   discord: { name: "Discord-бот: сообщения каналов", vars: "DISCORD_BOT_TOKEN" },
-  ai: { name: "Claude: сводка и ответы", vars: "ANTHROPIC_API_KEY" },
+  ai: { name: "Claude: сводка и автореплаер", vars: "ANTHROPIC_API_KEY" },
 };
 
 /** Что слушаем и какие ключи подключены. Монтируется при открытии, поэтому форма всегда свежая. */
@@ -205,7 +264,7 @@ export function SourcesModal({ onClose, sources, keys, errors = [] }: { onClose:
           </label>
         ))}
       </div>
-      <p className="mt-2 text-[12.5px] text-muted">По одному в строке. Референсы из «Плана» и наши вышедшие посты X слушаются сами.</p>
+      <p className="mt-2 text-[12.5px] text-muted">По одному в строке. Референсы из «Плана» и наши вышедшие посты X слушаются сами, наши посты Threads тоже.</p>
       {errors.length > 0 && (
         <ul className="mt-2 space-y-0.5 text-[12.5px] text-warn">
           {errors.slice(0, 6).map((e) => (

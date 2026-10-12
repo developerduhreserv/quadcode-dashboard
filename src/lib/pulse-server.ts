@@ -5,6 +5,8 @@
  * X с X_BEARER_TOKEN: поиск, watchlist и упоминания с просмотрами и закладками.
  * Reddit: нужен REDDIT_CLIENT_ID и REDDIT_CLIENT_SECRET (app-only OAuth), без них Reddit отдаёт 403.
  * Discord без ключа: размер и онлайн серверов по инвайтам. С DISCORD_BOT_TOKEN: сообщения каналов.
+ * Threads только с THREADS_ACCESS_TOKEN: наши посты с метриками, ответы на них, упоминания и поиск.
+ * Публичные страницы Threads данных не отдают, без токена сеть не подключается.
  */
 import { OUR_X, tweetId } from "./pulse";
 import type { PulseFeed } from "./pulse";
@@ -16,6 +18,7 @@ const CACHE = { next: { revalidate: 600 } } as const;
 
 export const KEYS = () => ({
   x: !!process.env.X_BEARER_TOKEN,
+  threads: !!process.env.THREADS_ACCESS_TOKEN,
   reddit: !!(process.env.REDDIT_CLIENT_ID && process.env.REDDIT_CLIENT_SECRET),
   discord: !!process.env.DISCORD_BOT_TOKEN,
   ai: !!process.env.ANTHROPIC_API_KEY,
@@ -164,6 +167,125 @@ async function collectX(src: PulseSources, tweets: string[], errors: string[]): 
     });
   }
   return items;
+}
+
+// ───────────── Threads ─────────────
+
+const THREADS = "https://graph.threads.net/v1.0";
+const T_FIELDS = "id,text,permalink,timestamp,media_type,username";
+
+interface ThreadsMedia {
+  id: string;
+  text?: string;
+  permalink?: string;
+  timestamp: string;
+  media_type?: string;
+  username?: string;
+}
+
+interface ThreadsInsight {
+  name: string;
+  values?: { value: number }[];
+  total_value?: { value: number };
+}
+
+function threadsGet<T>(path: string, params: Record<string, string>): Promise<T> {
+  const q = new URLSearchParams({ ...params, access_token: process.env.THREADS_ACCESS_TOKEN ?? "" });
+  return getJSON<T>(`${THREADS}${path}?${q}`);
+}
+
+const threadsItem = (m: ThreadsMedia, kind: PulseItem["kind"], source: string, me: string): PulseItem => ({
+  id: `threads:${m.id}`,
+  network: "threads",
+  kind,
+  author: m.username ?? "",
+  text: (m.text ?? "").slice(0, 600),
+  url: m.permalink ?? `https://www.threads.com/@${m.username}`,
+  at: Date.parse(m.timestamp),
+  likes: 0,
+  replies: 0,
+  source,
+  media: m.media_type === "VIDEO" ? "video" : m.media_type === "IMAGE" || m.media_type === "CAROUSEL_ALBUM" ? "image" : null,
+  ours: !!me && m.username === me,
+});
+
+async function collectThreads(src: PulseSources, errors: string[]): Promise<PulseItem[]> {
+  if (!process.env.THREADS_ACCESS_TOKEN) return [];
+  let me: { id: string; username: string };
+  try {
+    me = await threadsGet("/me", { fields: "id,username" });
+  } catch (e) {
+    errors.push(`Threads: ${(e as Error).message}`);
+    return [];
+  }
+  const items: PulseItem[] = [];
+  const settle = <T>(r: PromiseSettledResult<T>, what: string): T | null => {
+    if (r.status === "fulfilled") return r.value;
+    errors.push(`Threads ${what}: ${(r.reason as Error).message}`);
+    return null;
+  };
+
+  const [own, mentions, ...found] = await Promise.allSettled([
+    threadsGet<{ data: ThreadsMedia[] }>("/me/threads", { fields: T_FIELDS, limit: "15" }),
+    threadsGet<{ data: ThreadsMedia[] }>(`/${me.id}/mentions`, { fields: T_FIELDS, limit: "25" }),
+    ...src.threadsQueries.slice(0, 3).map((q) => threadsGet<{ data: ThreadsMedia[] }>("/keyword_search", { q, search_type: "TOP", fields: T_FIELDS, limit: "15" })),
+  ]);
+
+  // Наши посты: цифры из insights, ответы на свежие идут в «что пишут»
+  const posts = (settle(own, "посты")?.data ?? []).filter((m) => m.media_type !== "REPOST_FACADE");
+  const stats = await pool(posts, 4, (m) => threadsGet<{ data: ThreadsInsight[] }>(`/${m.id}/insights`, { metric: "views,likes,replies,reposts,quotes" }));
+  posts.forEach((m, i) => {
+    const item = threadsItem(m, "post", "наш пост", me.username);
+    const s = stats[i];
+    if (s.status === "fulfilled") {
+      const v = (n: string) => {
+        const x = s.value.data.find((d) => d.name === n);
+        return x?.total_value?.value ?? x?.values?.[0]?.value ?? 0;
+      };
+      Object.assign(item, { views: v("views"), likes: v("likes"), replies: v("replies"), reposts: v("reposts") + v("quotes") });
+    }
+    items.push(item);
+  });
+  const replies = await pool(posts.slice(0, 6), 3, (m) => threadsGet<{ data: ThreadsMedia[] }>(`/${m.id}/replies`, { fields: T_FIELDS, reverse: "true" }));
+  for (const r of replies) {
+    if (r.status === "fulfilled") items.push(...r.value.data.filter((m) => m.username !== me.username).map((m) => threadsItem(m, "mention", "ответ нам", me.username)));
+  }
+
+  items.push(...(settle(mentions, "упоминания")?.data ?? []).map((m) => threadsItem(m, "mention", "упоминание", me.username)));
+  found.forEach((r, i) => {
+    const q = src.threadsQueries[i];
+    items.push(...(settle(r, `«${q}»`)?.data ?? []).map((m) => threadsItem(m, "post", q, me.username)));
+  });
+  return items;
+}
+
+/** Ответ в Threads от нашего аккаунта: контейнер с reply_to_id, потом публикация. */
+export async function replyThreads(replyTo: string, text: string): Promise<string> {
+  const token = process.env.THREADS_ACCESS_TOKEN;
+  if (!token) throw new Error("Нет THREADS_ACCESS_TOKEN");
+  const post = async (path: string, body: Record<string, string>) => {
+    const res = await fetch(`${THREADS}${path}`, {
+      method: "POST",
+      body: new URLSearchParams({ ...body, access_token: token }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(10000),
+    });
+    const j = (await res.json().catch(() => ({}))) as { id?: string; error?: { message?: string } };
+    if (!res.ok || !j.id) throw new Error(j.error?.message ?? `Threads ${res.status}`);
+    return j.id;
+  };
+  const container = await post("/me/threads", { media_type: "TEXT", text, reply_to_id: replyTo });
+  // Контейнеру нужно время на обработку: пробуем опубликовать несколько раз
+  let last: unknown;
+  for (const wait of [0, 3000, 6000, 10000]) {
+    if (wait) await new Promise((r) => setTimeout(r, wait));
+    try {
+      return await post("/me/threads_publish", { creation_id: container });
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw last;
 }
 
 // ───────────── Reddit ─────────────
@@ -324,10 +446,15 @@ async function collectDiscord(src: PulseSources, errors: string[]): Promise<Puls
 
 export async function collect(src: PulseSources, tweets: string[]): Promise<PulseFeed> {
   const errors: string[] = [];
-  const [x, reddit, discord] = await Promise.all([collectX(src, tweets, errors), collectReddit(src, errors), collectDiscord(src, errors)]);
+  const [x, threads, reddit, discord] = await Promise.all([
+    collectX(src, tweets, errors),
+    collectThreads(src, errors),
+    collectReddit(src, errors),
+    collectDiscord(src, errors),
+  ]);
   // Один и тот же твит мог прийти и карточкой, и из поиска: оставляем версию с просмотрами
   const byId = new Map<string, PulseItem>();
-  for (const i of [...x, ...reddit, ...discord]) {
+  for (const i of [...x, ...threads, ...reddit, ...discord]) {
     const prev = byId.get(i.id);
     if (!prev || (i.views ?? 0) > (prev.views ?? 0) || (prev.kind === "post" && i.kind === "mention")) byId.set(i.id, i);
   }

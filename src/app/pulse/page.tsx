@@ -2,13 +2,14 @@
 
 import { Loader2, RefreshCw, Settings2, Sparkles, WandSparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { InsightRow, ItemCard, ItemStats, ReplyBox, SourcesModal, requestDraft } from "@/components/pulse";
+import { InsightRow, ItemCard, ItemStats, ReplyBox, SourcesModal, TEAM_HINT, requestDraft } from "@/components/pulse";
 import { Button, ChannelGlyph, Empty, IconButton, PageHead, Panel, Segments, cx, toast } from "@/components/ui";
 import { fmtNum, lastSnapshot, medianViews, verdictOf } from "@/lib/content";
 import { useNow } from "@/lib/hooks";
-import { NETWORK_NAME, fmtAgo, median, ruleDigest, sourcesOf, trackedTweets, weight } from "@/lib/pulse";
+import { NETWORK_NAME, fmtAgo, median, pulseFetch, ruleDigest, sourcesOf, trackedTweets, weight } from "@/lib/pulse";
+import { plural } from "@/lib/meta";
 import type { PulseFeed } from "@/lib/pulse";
-import { savePulseDigest, savePulseReply, useApp } from "@/lib/store";
+import { getState, savePulseDigest, savePulseReply, useApp } from "@/lib/store";
 import { PULSE_NETWORKS } from "@/lib/types";
 import type { PulseDigest, PulseItem, PulseNetwork } from "@/lib/types";
 
@@ -30,7 +31,7 @@ function useFeed(body: string, nonce: number) {
   const [state, setState] = useState<{ key: string; feed: PulseFeed | null; error: string | null }>(() => ({ key: "", feed: readCache(), error: null }));
   useEffect(() => {
     const ctrl = new AbortController();
-    fetch("/api/pulse", { method: "POST", headers: { "content-type": "application/json" }, body, signal: ctrl.signal })
+    pulseFetch("/api/pulse", JSON.parse(body), ctrl.signal)
       .then((r) => (r.ok ? (r.json() as Promise<PulseFeed>) : Promise.reject(new Error(`Сервер ответил ${r.status}`))))
       .then((feed) => {
         setState({ key, feed, error: null });
@@ -89,15 +90,11 @@ export default function PulsePage() {
           const s = lastSnapshot(t);
           return { title: t.title, format: t.format, model: t.model, views: s?.views, likes: s?.likes, bookmarks: s?.bookmarks, verdict: verdictOf(t, median), url: t.postUrl };
         });
-      const res = await fetch("/api/pulse/digest", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ items: [...items].sort((a, b) => weight(b) - weight(a)).slice(0, 80), ours, releases: db.meta.releases ?? [] }),
-      });
-      if (res.status === 501) {
-        savePulseDigest(ruleDigest(items, tasks, me, sent));
-        toast("Claude не подключён, сводка по правилам", 2600);
-      } else {
+      const res = await pulseFetch("/api/pulse/digest", { items: [...items].sort((a, b) => weight(b) - weight(a)).slice(0, 80), ours, releases: db.meta.releases ?? [] });
+      // Без Claude сводка остаётся живой, по правилам: не замораживаем её снимком
+      if (res.status === 501) toast("Claude не подключён, сводка по правилам", 2600);
+      else if (res.status === 401) toast(TEAM_HINT, 3000, { wait: true });
+      else {
         const j = (await res.json()) as Omit<PulseDigest, "at" | "by"> & { error?: string };
         if (!res.ok || j.error) toast(j.error ?? "Не получилось", 3000, { wait: true });
         else savePulseDigest({ ...j, at: Date.now(), by: me });
@@ -116,11 +113,12 @@ export default function PulsePage() {
     let done = 0;
     for (const i of queue) {
       const r = await requestDraft(i);
-      if (r.noKey) {
-        toast("Для автореплаера нужен ANTHROPIC_API_KEY", 2600, { wait: true });
+      if (r.noKey || r.error) {
+        toast(r.noKey ? "Для автореплаера нужен ANTHROPIC_API_KEY" : r.error!, 3000, { wait: true });
         break;
       }
-      if (r.draft) savePulseReply(i.url, r.draft);
+      // Пока ждали ответ, человек мог написать свой черновик: его не трогаем
+      if (r.draft && !getState().db.pulse.replies?.[i.url]) savePulseReply(i.url, r.draft);
       setAuto({ done: ++done, total: queue.length });
     }
     setAuto(null);
@@ -135,7 +133,7 @@ export default function PulsePage() {
         title="Пульс"
         right={
           <>
-            <Button onClick={() => setNonce((n) => n + 1)} disabled={loading} title={feed ? `Обновлено ${fmtAgo(feed.at, now)} назад` : undefined}>
+            <Button onClick={() => setNonce((n) => n + 1)} disabled={loading} aria-label="Обновить" title={feed ? `Обновлено ${fmtAgo(feed.at, now)} назад` : undefined}>
               <RefreshCw size={15} className={cx(loading && "animate-spin")} />
               <span className="hidden sm:inline">{feed && !loading ? fmtAgo(feed.at, now) : "Обновить"}</span>
             </Button>
@@ -226,7 +224,7 @@ export default function PulsePage() {
         )}
       </Panel>
 
-      <div className="grid gap-4 lg:grid-cols-[1.35fr_1fr]">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
         <Panel title="Что заходит">
           {hot.length ? (
             <div className="space-y-2">
@@ -292,7 +290,17 @@ export default function PulsePage() {
         </div>
       </div>
 
-      {editing && <SourcesModal onClose={() => setEditing(false)} sources={sources} keys={keys} errors={feed?.errors} />}
+      {editing && (
+        <SourcesModal
+          onClose={() => {
+            setEditing(false);
+            setNonce((n) => n + 1);
+          }}
+          sources={sources}
+          keys={keys}
+          errors={feed?.errors}
+        />
+      )}
     </div>
   );
 }
@@ -325,15 +333,15 @@ function NetworkTile({
   if (net === "discord") {
     const online = servers.reduce((a, s) => a + (s.online ?? 0), 0);
     value = servers.length ? fmtNum(online) : "—";
-    sub = servers.length ? `онлайн на ${servers.length} серв.` : "серверы не добавлены";
+    sub = servers.length ? `онлайн на ${servers.length} ${plural(servers.length, ["сервере", "серверах", "серверах"])}` : "серверы не добавлены";
   } else if (!posts.length) {
     value = "—";
     sub = (net === "reddit" || net === "threads") && !live ? `нужен ключ ${NETWORK_NAME[net]}` : "нет данных";
   } else {
     value = fmtNum(Math.round(median(posts.map((p) => p.likes))));
-    sub = `${net === "reddit" ? "↑" : "♥"} медиана, ${posts.length} постов`;
+    sub = `${net === "reddit" ? "↑" : "♥"} медиана, ${posts.length} ${plural(posts.length, ["пост", "поста", "постов"])}`;
   }
-  const empty = value === "—";
+  const empty = value === "—" && mentions === 0;
 
   return (
     <button
@@ -346,9 +354,9 @@ function NetworkTile({
           <ChannelGlyph id={net} size={14} />
         </span>
         {NETWORK_NAME[net]}
-        {mentions > 0 && <span className="font-mono ml-auto rounded-md border border-accent/35 bg-accent/[0.1] px-1.5 text-[11px] text-accent-soft">{mentions} ждут ответа</span>}
+        {mentions > 0 && <span className="font-mono ml-auto rounded-md border border-accent/35 bg-accent/[0.1] px-1.5 text-[11px] text-accent-soft">{mentions} {plural(mentions, ["ждёт", "ждут", "ждут"])} ответа</span>}
       </div>
-      <div className={cx("font-display mt-2 text-[28px] font-medium leading-none", empty ? "text-muted" : "text-ink")}>{value}</div>
+      <div className={cx("font-display mt-2 text-[28px] font-medium leading-none", value === "—" ? "text-muted" : "text-ink")}>{value}</div>
       <div className="mt-1.5 truncate text-[12.5px] text-muted">{sub}</div>
       {top && <div className="mt-1 truncate text-[12.5px] text-ink-2">Топ: {net === "x" || net === "threads" ? `@${top.author}` : top.source}</div>}
     </button>

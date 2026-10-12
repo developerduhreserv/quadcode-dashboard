@@ -1,5 +1,5 @@
 import { DEFAULT_SOURCES } from "@/lib/pulse";
-import { KEYS, collect } from "@/lib/pulse-server";
+import { KEYS, collect, teamOk } from "@/lib/pulse-server";
 import type { PulseSources } from "@/lib/types";
 
 export const maxDuration = 60;
@@ -8,8 +8,8 @@ const list = (v: unknown, max: number): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim().slice(0, 300)).slice(0, max) : [];
 
 /** Что подключено на сервере: без запросов наружу. */
-export async function GET() {
-  return Response.json({ keys: KEYS() });
+export async function GET(request: Request) {
+  return Response.json({ keys: { ...KEYS(), paid: teamOk(request) } });
 }
 
 /** Лента «Пульса»: источники и отслеживаемые твиты приходят из общей базы дашборда. */
@@ -27,5 +27,5 @@ export async function POST(request: Request) {
     discordChannels: list(s.discordChannels, 15),
   };
   const tweets = list(body.tweets, 120).filter((id) => /^\d{6,25}$/.test(id));
-  return Response.json(await collect(sources, tweets));
+  return Response.json(await collect(sources, tweets, teamOk(request)));
 }

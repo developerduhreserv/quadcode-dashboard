@@ -173,6 +173,7 @@ export function QuickCapture({
             }
           }}
           placeholder={placeholder}
+          title="Метки: #x #тредс #дс #рд, @имя, !! срочно, сегодня, завтра, 12.10"
           aria-label="Новая задача"
           data-autofocus={autoFocus ? "" : undefined}
           className={cx("min-w-0 flex-1 bg-transparent outline-none placeholder:text-white/40", large ? "text-[17px]" : "text-[15px]")}

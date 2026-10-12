@@ -2,7 +2,7 @@
 
 import { ArrowBigUp, Check, Copy, ExternalLink, Eye, Heart, Loader2, MessageCircle, Play, Repeat2, Send, Sparkles, Users } from "lucide-react";
 import { useState } from "react";
-import { NETWORK_NAME, clip, fmtAgo, nativeId, xReplyIntent } from "@/lib/pulse";
+import { NETWORK_NAME, clip, fmtAgo, nativeId, pulseFetch, safeUrl, setTeamKey, teamKey, xReplyIntent } from "@/lib/pulse";
 import { fmtNum } from "@/lib/content";
 import { savePulseReply, savePulseSent, savePulseSources, useApp } from "@/lib/store";
 import type { PulseFeed } from "@/lib/pulse";
@@ -46,13 +46,13 @@ export function ItemStats({ item }: { item: PulseItem }) {
 export function ItemCard({ item, now, children }: { item: PulseItem; now: number; children?: React.ReactNode }) {
   const who = item.network === "x" || item.network === "threads" ? `@${item.author}` : item.network === "reddit" ? `u/${item.author}` : item.author;
   return (
-    <article className="rounded-xl border border-line bg-white/[0.03] transition-colors duration-300 hover:border-line-2 hover:bg-white/[0.05]">
-      <a href={item.url} target="_blank" rel="noreferrer" className="block p-3">
-        <div className="flex min-w-0 items-center gap-2 text-[12.5px] text-muted">
+    <article className="min-w-0 rounded-xl border border-line bg-white/[0.03] transition-colors duration-300 hover:border-line-2 hover:bg-white/[0.05]">
+      <a href={safeUrl(item.url) ?? undefined} target="_blank" rel="noreferrer noopener" className="block p-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted">
           <span style={{ color: NET_COLOR[item.network] }}>
             <ChannelGlyph id={item.network} size={13} />
           </span>
-          <span className="truncate text-ink-2">{who}</span>
+          <span className="min-w-0 max-w-[50%] truncate text-ink-2">{who}</span>
           {item.source && item.network !== "x" && <span className="hidden truncate sm:inline">{item.source}</span>}
           <span className="shrink-0">{fmtAgo(item.at, now)}</span>
           {item.media === "video" && <Play size={11} className="shrink-0 fill-current" aria-label="видео" />}
@@ -71,11 +71,14 @@ export function ItemCard({ item, now, children }: { item: PulseItem; now: number
 }
 
 /** Черновик ответа от Claude. noKey: на сервере нет ANTHROPIC_API_KEY. */
+export const TEAM_HINT = "Нужен ключ команды: шестерёнка в «Пульсе»";
+
 export async function requestDraft(item: PulseItem): Promise<{ draft?: string; error?: string; noKey?: boolean }> {
   try {
-    const res = await fetch("/api/pulse/reply", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(item) });
+    const res = await pulseFetch("/api/pulse/reply", item);
     const j = (await res.json()) as { draft?: string; error?: string };
     if (res.status === 501) return { noKey: true };
+    if (res.status === 401) return { error: TEAM_HINT };
     if (!res.ok || !j.draft) return { error: j.error ?? "Не получилось" };
     return { draft: j.draft };
   } catch {
@@ -107,23 +110,25 @@ export function ReplyBox({ item }: { item: PulseItem }) {
 
   const copyAndOpen = async () => {
     await navigator.clipboard.writeText(saved).catch(() => {});
-    window.open(item.url, "_blank");
+    const url = safeUrl(item.url);
+    if (url) window.open(url, "_blank", "noopener");
     savePulseSent(item.url, Date.now());
     toast("Текст скопирован", 1600);
   };
 
   const send = async () => {
     if (item.network === "x") {
-      window.open(xReplyIntent(nativeId(item), saved), "_blank");
+      window.open(xReplyIntent(nativeId(item), saved), "_blank", "noopener");
       savePulseSent(item.url, Date.now());
       return;
     }
     if (item.network !== "threads") return copyAndOpen();
     setBusy("send");
     try {
-      const res = await fetch("/api/pulse/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ network: "threads", replyTo: nativeId(item), text: saved }) });
+      const res = await pulseFetch("/api/pulse/send", { network: "threads", replyTo: nativeId(item), text: saved });
       const j = (await res.json()) as { id?: string; error?: string };
       if (res.status === 501) await copyAndOpen();
+      else if (res.status === 401) toast(TEAM_HINT, 3000, { wait: true });
       else if (!res.ok) toast(j.error ?? "Не отправилось", 3000, { wait: true });
       else {
         savePulseSent(item.url, Date.now());
@@ -206,8 +211,12 @@ export function InsightRow({ insight }: { insight: PulseInsight }) {
         {(insight.action || !!insight.refs?.length) && (
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
             {insight.action && <span className="text-accent-soft">→ {insight.action}</span>}
-            {insight.refs?.slice(0, 3).map((u) => (
-              <a key={u} href={u} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-muted hover:text-ink">
+            {insight.refs
+              ?.map(safeUrl)
+              .filter((u): u is string => !!u)
+              .slice(0, 3)
+              .map((u) => (
+              <a key={u} href={u} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1 text-muted hover:text-ink">
                 <ExternalLink size={11} />
                 {u.replace(/^https?:\/\/(www\.)?/, "").split("/").slice(0, 2).join("/")}
               </a>
@@ -232,7 +241,8 @@ const FIELDS: { key: keyof PulseSources; net: PulseNetwork; label: string; place
   { key: "discordChannels", net: "discord", label: "Каналы для бота", placeholder: "ID канала", needs: "discord" },
 ];
 
-const ENV: Record<keyof PulseFeed["keys"], { name: string; vars: string }> = {
+type EnvKey = "x" | "threads" | "reddit" | "discord" | "ai";
+const ENV: Record<EnvKey, { name: string; vars: string }> = {
   x: { name: "X API: поиск, watchlist, упоминания, просмотры", vars: "X_BEARER_TOKEN" },
   threads: { name: "Threads: наши посты, ответы, упоминания, поиск и отправка ответов", vars: "THREADS_ACCESS_TOKEN" },
   reddit: { name: "Reddit", vars: "REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET" },
@@ -243,6 +253,7 @@ const ENV: Record<keyof PulseFeed["keys"], { name: string; vars: string }> = {
 /** Что слушаем и какие ключи подключены. Монтируется при открытии, поэтому форма всегда свежая. */
 export function SourcesModal({ onClose, sources, keys, errors = [] }: { onClose: () => void; sources: PulseSources; keys: PulseFeed["keys"] | null; errors?: string[] }) {
   const [form, setForm] = useState<Record<keyof PulseSources, string>>(() => toForm(sources));
+  const [team, setTeam] = useState(teamKey);
 
   return (
     <Modal open onClose={onClose} title="Источники" wide>
@@ -273,10 +284,20 @@ export function SourcesModal({ onClose, sources, keys, errors = [] }: { onClose:
         </ul>
       )}
 
+      <label className="mt-5 block">
+        <span className="eyebrow mb-1.5 flex items-center gap-2">
+          Ключ команды
+          {keys && !keys.team && <span className="font-sans normal-case tracking-normal text-warn">не задан PULSE_TEAM_KEY</span>}
+          {keys?.team && keys.paid && <span className="font-sans normal-case tracking-normal text-good">подходит</span>}
+        </span>
+        <input type="password" value={team} onChange={(e) => setTeam(e.target.value)} autoComplete="off" placeholder="PULSE_TEAM_KEY" className={cx(fieldClass, "font-mono text-[13px]")} />
+        <span className="mt-1 block text-[12px] text-muted">Без него платные источники, сводка Claude и отправка ответов выключены. Хранится только в этом браузере.</span>
+      </label>
+
       <div className="mt-5 rounded-xl border border-line p-3">
         <div className="eyebrow mb-2">Ключи на Vercel</div>
         <ul className="space-y-1.5">
-          {(Object.keys(ENV) as (keyof PulseFeed["keys"])[]).map((k) => (
+          {(Object.keys(ENV) as EnvKey[]).map((k) => (
             <li key={k} className="flex items-start gap-2 text-[13px]">
               {keys?.[k] ? <Check size={14} className="mt-0.5 shrink-0 text-good" /> : <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-white/25" />}
               <span className={keys?.[k] ? "text-ink-2" : "text-muted"}>
@@ -296,6 +317,7 @@ export function SourcesModal({ onClose, sources, keys, errors = [] }: { onClose:
           onClick={() => {
             const next = Object.fromEntries((Object.keys(form) as (keyof PulseSources)[]).map((k) => [k, lines(form[k])])) as unknown as PulseSources;
             savePulseSources(next);
+            setTeamKey(team);
             onClose();
           }}
         >

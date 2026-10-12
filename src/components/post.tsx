@@ -409,7 +409,7 @@ function WhereFields({ task }: { task: Task }) {
         <Pills
           label="Где выходит"
           value={main}
-          onChange={(c) => updateTask(task.id, { channelId: c, alsoTo: also.filter((x) => x !== c) })}
+          onChange={(c) => updateTask(task.id, { channelId: c, alsoTo: also.filter((x) => x !== c), time: task.time ?? "15:00" })}
           options={CHANNEL_IDS.map((c) => ({ value: c, label: chip(c, c === main) }))}
         />
       </Field>

@@ -40,13 +40,14 @@ npm run dev
 
 Сервер собирает ленту в `src/app/api/pulse`. Без ключей работают карточки твитов (референсы из «Плана», наши вышедшие посты и ручной список: лайки, ответы, видео) и размер и онлайн Discord-серверов по инвайтам. Сводка без ключа Claude считается по правилам.
 
-Ключи задаются в Vercel → Settings → Environment Variables, после этого нужен новый деплой:
+Ключи задаются в Vercel → Settings → Environment Variables, после этого нужен новый деплой. Discord-боту для чтения сообщений нужен Message Content Intent в настройках бота.
 
 | переменная | что включает |
 |---|---|
 | `ANTHROPIC_API_KEY` | AI-сводку (Claude Opus 5.5 с веб-поиском по свежим трендам) и автореплаер |
 | `X_BEARER_TOKEN` | поиск по X, watchlist, упоминания @quadcode_ai, просмотры и закладки |
-| `THREADS_ACCESS_TOKEN` | Threads: наши посты с метриками, ответы на них, упоминания, поиск и отправка ответов. Права приложения: `threads_basic`, `threads_manage_insights`, `threads_read_replies`, `threads_manage_replies`, `threads_manage_mentions`, `threads_keyword_search` |
+| `THREADS_ACCESS_TOKEN` | Threads: наши посты с метриками, ответы на них, упоминания, поиск и отправка ответов. Права приложения: `threads_basic`, `threads_content_publish`, `threads_manage_insights`, `threads_read_replies`, `threads_manage_replies`, `threads_manage_mentions`, `threads_keyword_search` |
+| `PULSE_TEAM_KEY` | обязателен вместе с любым ключом выше: сайт открыт без входа, поэтому платные источники, сводка Claude и отправка ответов работают только у тех, кто ввёл этот ключ в «Пульс» → шестерёнка → «Ключ команды». Без него на сервере всё платное выключено |
 | `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` | топ сабреддитов за день и поиск упоминаний. Без ключа Reddit отдаёт 403 |
 | `DISCORD_BOT_TOKEN` | сообщения каналов, куда добавлен бот |
 

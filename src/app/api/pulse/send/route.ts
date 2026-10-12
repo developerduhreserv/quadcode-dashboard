@@ -1,4 +1,4 @@
-import { replyThreads } from "@/lib/pulse-server";
+import { replyThreads, teamDenied, teamOk } from "@/lib/pulse-server";
 
 export const maxDuration = 60;
 
@@ -9,6 +9,7 @@ export async function POST(request: Request) {
   if (body?.network !== "threads" || !body.replyTo || !/^\d+$/.test(body.replyTo) || !text) return Response.json({ error: "Нечего отправлять" }, { status: 400 });
   if (text.length > 500) return Response.json({ error: "В Threads не больше 500 символов" }, { status: 400 });
   if (!process.env.THREADS_ACCESS_TOKEN) return Response.json({ error: "no-key" }, { status: 501 });
+  if (!teamOk(request)) return teamDenied();
   try {
     return Response.json({ id: await replyThreads(body.replyTo, text) });
   } catch (e) {

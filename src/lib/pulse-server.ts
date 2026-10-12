@@ -8,6 +8,7 @@
  * Threads только с THREADS_ACCESS_TOKEN: наши посты с метриками, ответы на них, упоминания и поиск.
  * Публичные страницы Threads данных не отдают, без токена сеть не подключается.
  */
+import { timingSafeEqual } from "node:crypto";
 import { OUR_X, tweetId } from "./pulse";
 import type { PulseFeed } from "./pulse";
 import type { PulseItem, PulseSources } from "./types";
@@ -16,12 +17,46 @@ const UA = "web:quadcode-content-dashboard:1.0 (by /u/quadcode_ai)";
 /** Повторный запрос того же адреса в течение 10 минут берётся из кэша Next */
 const CACHE = { next: { revalidate: 600 } } as const;
 
+/**
+ * Сайт открыт без входа, поэтому всё, что тратит платные ключи или публикует от бренда,
+ * работает только с ключом команды: заголовок x-team-key должен совпасть с PULSE_TEAM_KEY.
+ * Нет PULSE_TEAM_KEY на сервере: платное и публикация выключены совсем.
+ */
+export function teamOk(request: Request): boolean {
+  const want = process.env.PULSE_TEAM_KEY ?? "";
+  const got = request.headers.get("x-team-key") ?? "";
+  if (!want || got.length !== want.length) return false;
+  return timingSafeEqual(Buffer.from(got), Buffer.from(want));
+}
+
+export const teamDenied = () => Response.json({ error: "team-key" }, { status: 401 });
+
+/** Значения источников идут в путь URL апстрима: пропускаем только ожидаемый вид. */
+const SUBREDDIT = /^[A-Za-z0-9_]{2,21}$/;
+const INVITE = /^[A-Za-z0-9-]{2,32}$/;
+const SNOWFLAKE = /^\d{15,21}$/;
+export const inviteCode = (s: string) => s.trim().replace(/^(https?:\/\/)?(www\.)?(discord\.gg|discord\.com\/invite)\//i, "").replace(/[/?#].*$/, "");
+
+/** Общий потолок на один источник, чтобы медленная сеть не съела весь запрос. */
+function deadline<T>(p: Promise<T>, ms: number, fallback: T, errors: string[], what: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((resolve) =>
+      setTimeout(() => {
+        errors.push(`${what}: не успел за ${Math.round(ms / 1000)} с`);
+        resolve(fallback);
+      }, ms),
+    ),
+  ]);
+}
+
 export const KEYS = () => ({
   x: !!process.env.X_BEARER_TOKEN,
   threads: !!process.env.THREADS_ACCESS_TOKEN,
   reddit: !!(process.env.REDDIT_CLIENT_ID && process.env.REDDIT_CLIENT_SECRET),
   discord: !!process.env.DISCORD_BOT_TOKEN,
   ai: !!process.env.ANTHROPIC_API_KEY,
+  team: !!process.env.PULSE_TEAM_KEY,
 });
 
 async function getJSON<T>(url: string, init: RequestInit & { next?: { revalidate: number } } = {}, ms = 8000): Promise<T> {
@@ -139,7 +174,7 @@ async function xSearch(query: string, kind: PulseItem["kind"], source: string): 
   });
 }
 
-async function collectX(src: PulseSources, tweets: string[], errors: string[]): Promise<PulseItem[]> {
+async function collectX(src: PulseSources, tweets: string[], errors: string[], paid: boolean): Promise<PulseItem[]> {
   const items: PulseItem[] = [];
   const ids = [...new Set([...tweets, ...src.xPosts.map((u) => tweetId(u)).filter((x): x is string => !!x)])].slice(0, 80);
   const cards = await pool(ids, 8, tweetCard);
@@ -150,7 +185,7 @@ async function collectX(src: PulseSources, tweets: string[], errors: string[]): 
   }
   if (failed && failed === ids.length) errors.push("X: карточки твитов не ответили");
 
-  if (process.env.X_BEARER_TOKEN) {
+  if (paid && process.env.X_BEARER_TOKEN) {
     const handles = src.xAccounts.map((h) => h.replace(/^@/, "").trim()).filter(Boolean);
     const jobs: [string, PulseItem["kind"], string][] = [
       ...src.xQueries.slice(0, 3).map((q): [string, PulseItem["kind"], string] => [q, "post", q]),
@@ -209,8 +244,8 @@ const threadsItem = (m: ThreadsMedia, kind: PulseItem["kind"], source: string, m
   ours: !!me && m.username === me,
 });
 
-async function collectThreads(src: PulseSources, errors: string[]): Promise<PulseItem[]> {
-  if (!process.env.THREADS_ACCESS_TOKEN) return [];
+async function collectThreads(src: PulseSources, errors: string[], paid: boolean): Promise<PulseItem[]> {
+  if (!paid || !process.env.THREADS_ACCESS_TOKEN) return [];
   let me: { id: string; username: string };
   try {
     me = await threadsGet("/me", { fields: "id,username" });
@@ -275,9 +310,9 @@ export async function replyThreads(replyTo: string, text: string): Promise<strin
     return j.id;
   };
   const container = await post("/me/threads", { media_type: "TEXT", text, reply_to_id: replyTo });
-  // Контейнеру нужно время на обработку: пробуем опубликовать несколько раз
+  // Контейнеру нужно время на обработку: две попытки. Опубликованный контейнер второй раз не выйдет, дубля не будет
   let last: unknown;
-  for (const wait of [0, 3000, 6000, 10000]) {
+  for (const wait of [2000, 6000]) {
     if (wait) await new Promise((r) => setTimeout(r, wait));
     try {
       return await post("/me/threads_publish", { creation_id: container });
@@ -348,8 +383,8 @@ async function redditList(path: string, kind: PulseItem["kind"], token: string):
   }));
 }
 
-async function collectReddit(src: PulseSources, errors: string[]): Promise<PulseItem[]> {
-  if (!process.env.REDDIT_CLIENT_ID || !process.env.REDDIT_CLIENT_SECRET) return [];
+async function collectReddit(src: PulseSources, errors: string[], paid: boolean): Promise<PulseItem[]> {
+  if (!paid || !process.env.REDDIT_CLIENT_ID || !process.env.REDDIT_CLIENT_SECRET) return [];
   let token: string;
   try {
     token = await redditAuth();
@@ -358,8 +393,14 @@ async function collectReddit(src: PulseSources, errors: string[]): Promise<Pulse
     return [];
   }
   const jobs: [string, PulseItem["kind"]][] = [
-    ...src.subreddits.slice(0, 10).map((s): [string, PulseItem["kind"]] => [`/r/${s.replace(/^r\//, "")}/top?t=day&limit=8`, "post"]),
-    ...src.redditQueries.slice(0, 3).map((q): [string, PulseItem["kind"]] => [`/search?q=${encodeURIComponent(q)}&sort=new&t=week&limit=12`, "mention"]),
+    ...src.subreddits
+      .map((s) => s.replace(/^\/?r\//i, "").trim())
+      .filter((s) => SUBREDDIT.test(s))
+      .slice(0, 10)
+      .map((s): [string, PulseItem["kind"]] => [`/r/${s}/top?t=day&limit=8`, "post"]),
+    ...src.redditQueries
+      .slice(0, 3)
+      .map((q): [string, PulseItem["kind"]] => [`/search?q=${encodeURIComponent(q)}&sort=new&t=week&limit=12`, /quadcode/i.test(q) ? "mention" : "post"]),
   ];
   const items: PulseItem[] = [];
   const res = await pool(jobs, 4, ([path, kind]) => redditList(path, kind, token));
@@ -388,9 +429,9 @@ interface DiscordMessage {
   thread?: { message_count?: number };
 }
 
-async function collectDiscord(src: PulseSources, errors: string[]): Promise<PulseItem[]> {
+async function collectDiscord(src: PulseSources, errors: string[], paid: boolean): Promise<PulseItem[]> {
   const items: PulseItem[] = [];
-  const codes = src.discordInvites.map((c) => c.replace(/^https?:\/\/(www\.)?(discord\.gg|discord\.com\/invite)\//, "").trim()).filter(Boolean);
+  const codes = src.discordInvites.map(inviteCode).filter((c) => INVITE.test(c));
   const inv = await pool(codes.slice(0, 15), 4, (code) => getJSON<Invite>(`https://discord.com/api/v10/invites/${code}?with_counts=true`));
   inv.forEach((r, i) => {
     if (r.status !== "fulfilled" || !r.value.guild) {
@@ -414,9 +455,10 @@ async function collectDiscord(src: PulseSources, errors: string[]): Promise<Puls
   });
 
   const bot = process.env.DISCORD_BOT_TOKEN;
-  if (bot && src.discordChannels.length) {
+  const channels = src.discordChannels.map((c) => c.trim()).filter((c) => SNOWFLAKE.test(c)).slice(0, 10);
+  if (paid && bot && channels.length) {
     const headers = { Authorization: `Bot ${bot}` };
-    const res = await pool(src.discordChannels.slice(0, 10), 3, async (channel) => {
+    const res = await pool(channels, 3, async (channel) => {
       const info = await getJSON<{ guild_id: string; name: string }>(`https://discord.com/api/v10/channels/${channel}`, { headers });
       const list = await getJSON<DiscordMessage[]>(`https://discord.com/api/v10/channels/${channel}/messages?limit=30`, { headers });
       return list
@@ -438,25 +480,31 @@ async function collectDiscord(src: PulseSources, errors: string[]): Promise<Puls
     });
     res.forEach((r, i) => {
       if (r.status === "fulfilled") items.push(...r.value);
-      else errors.push(`Discord: канал ${src.discordChannels[i]} ${(r.reason as Error).message}`);
+      else errors.push(`Discord: канал ${channels[i]} ${(r.reason as Error).message}`);
     });
   }
   return items;
 }
 
-export async function collect(src: PulseSources, tweets: string[]): Promise<PulseFeed> {
+/** paid: запрос с ключом команды, можно тратить платные ключи. */
+export async function collect(src: PulseSources, tweets: string[], paid: boolean): Promise<PulseFeed> {
   const errors: string[] = [];
+  const cap = 40_000;
   const [x, threads, reddit, discord] = await Promise.all([
-    collectX(src, tweets, errors),
-    collectThreads(src, errors),
-    collectReddit(src, errors),
-    collectDiscord(src, errors),
+    deadline(collectX(src, tweets, errors, paid), cap, [], errors, "X"),
+    deadline(collectThreads(src, errors, paid), cap, [], errors, "Threads"),
+    deadline(collectReddit(src, errors, paid), cap, [], errors, "Reddit"),
+    deadline(collectDiscord(src, errors, paid), cap, [], errors, "Discord"),
   ]);
   // Один и тот же твит мог прийти и карточкой, и из поиска: оставляем версию с просмотрами
   const byId = new Map<string, PulseItem>();
   for (const i of [...x, ...threads, ...reddit, ...discord]) {
     const prev = byId.get(i.id);
-    if (!prev || (i.views ?? 0) > (prev.views ?? 0) || (prev.kind === "post" && i.kind === "mention")) byId.set(i.id, i);
+    if (!prev) byId.set(i.id, i);
+    else {
+      const best = (i.views ?? 0) > (prev.views ?? 0) ? i : prev;
+      byId.set(i.id, { ...best, kind: prev.kind === "mention" || i.kind === "mention" ? "mention" : best.kind });
+    }
   }
-  return { items: [...byId.values()], keys: KEYS(), errors, at: Date.now() };
+  return { items: [...byId.values()], keys: { ...KEYS(), paid }, errors, at: Date.now() };
 }

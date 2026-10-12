@@ -23,6 +23,38 @@ export const DEFAULT_SOURCES: PulseSources = {
 
 export const NETWORK_NAME: Record<PulseNetwork, string> = { x: "X", threads: "Threads", reddit: "Reddit", discord: "Discord" };
 
+/** Только http(s): ссылки приходят из соцсетей и от модели, javascript: и прочее не пропускаем. */
+export function safeUrl(u: string | undefined | null): string | null {
+  if (!u) return null;
+  try {
+    const url = new URL(u);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Ключ команды хранится в этом браузере и уходит заголовком x-team-key. */
+const TEAM_KEY = "qcai:pulse:team";
+export function teamKey(): string {
+  try {
+    return localStorage.getItem(TEAM_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+export function setTeamKey(v: string) {
+  try {
+    if (v.trim()) localStorage.setItem(TEAM_KEY, v.trim());
+    else localStorage.removeItem(TEAM_KEY);
+  } catch {}
+}
+
+/** POST в /api/pulse* с ключом команды. */
+export function pulseFetch(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+  return fetch(path, { method: "POST", headers: { "content-type": "application/json", "x-team-key": teamKey() }, body: JSON.stringify(body), signal });
+}
+
 /** ID поста в своей сети из id элемента: «x:123» → «123». */
 export const nativeId = (i: PulseItem) => i.id.slice(i.id.indexOf(":") + 1);
 
@@ -197,7 +229,7 @@ export function clip(s: string, n: number): string {
 export interface PulseFeed {
   items: PulseItem[];
   /** Что подключено на сервере */
-  keys: { x: boolean; threads: boolean; reddit: boolean; discord: boolean; ai: boolean };
+  keys: { x: boolean; threads: boolean; reddit: boolean; discord: boolean; ai: boolean; team: boolean; paid?: boolean };
   errors: string[];
   at: number;
 }

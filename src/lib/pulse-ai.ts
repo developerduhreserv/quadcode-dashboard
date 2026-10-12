@@ -123,7 +123,10 @@ export async function buildDigest(input: DigestInput): Promise<Omit<PulseDigest,
   // pause_turn: сервер приостановил долгий поиск, отправляем ход обратно и продолжаем.
   // Закончил текстом без submit_digest: один раз просим отдать итог инструментом
   let nudged = false;
+  const until = Date.now() + 270_000;
   for (let turn = 0; turn < 5; turn++) {
+    const left = until - Date.now();
+    if (left < 20_000) throw new AiError("Сводка не успела собраться, попробуйте ещё раз");
     const res = await client.beta.messages.create({
       model: MODEL,
       max_tokens: 16000,
@@ -133,7 +136,7 @@ export async function buildDigest(input: DigestInput): Promise<Omit<PulseDigest,
       system: [{ type: "text", text: DIGEST_SYSTEM, cache_control: { type: "ephemeral" } }],
       tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 5 }, DIGEST_TOOL],
       messages,
-    });
+    }, { timeout: left, maxRetries: 1 });
     if (res.stop_reason === "refusal") throw new AiError("Модель отказалась собирать сводку");
     const call = res.content.find((b): b is Anthropic.Beta.BetaToolUseBlock => b.type === "tool_use" && b.name === DIGEST_TOOL.name);
     if (call) {
